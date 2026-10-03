@@ -66,6 +66,11 @@ function renderCheck(check: CheckResult, mode: OutputMode): string[] {
 }
 
 function renderFact(fact: Fact): string {
+  // Redirect chain hops (ticket #7) announce in the `→ 301 <url>` shape,
+  // one line per hop in hop order; other Facts keep the name: value form.
+  if (fact.name === "Redirect") {
+    return chalk.dim(`  → ${fact.value}`);
+  }
   return chalk.dim(`  ${fact.name}: ${fact.value}`);
 }
 

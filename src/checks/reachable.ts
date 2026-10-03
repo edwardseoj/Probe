@@ -26,6 +26,17 @@ export interface HttpResponse {
   headers?: { get(name: string): string | null };
   body?: string;
   elapsedMs?: number;
+  /**
+   * Redirect hops traversed to reach this response, first hop first
+   * (ticket #7) — status + resolved destination Location per hop.
+   */
+  redirectHops?: readonly RedirectHop[];
+}
+
+/** One announced redirect hop: the 3xx status observed and where it pointed. */
+export interface RedirectHop {
+  readonly status: number;
+  readonly location: string;
 }
 
 export function reachableCheck(response: HttpResponse): CheckResult {

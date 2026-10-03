@@ -1,9 +1,10 @@
 /**
  * run(target, options) -> RunResult is the orchestrator seam: Target +
  * options in, verdict/checks out. The network is injected behind a single
- * fetch-like boundary (default wraps undici's fetch) and the TLS probe
- * behind a tls-probe-like boundary (default runs node:tls out-of-band —
- * see checks/tls.ts). No check ever sets an exit code; the verdict module
+ * fetch-like boundary (the default transport follows redirects and
+ * announces the chain — see redirects.ts) and the TLS probe behind a
+ * tls-probe-like boundary (default runs node:tls out-of-band — see
+ * checks/tls.ts). No check ever sets an exit code; the verdict module
  * owns verdict derivation and the verdict -> exit mapping (ADR-0001).
  *
  * Run budget: ONE shared clock (AbortSignal.timeout) bounds every network
@@ -12,10 +13,10 @@
  * silent. Zero completed checks -> Unreachable.
  */
 
-import { fetch as undiciFetch } from "undici";
 import { reachableCheck } from "./checks/reachable.js";
 import { contentSanityCheck } from "./checks/content-sanity.js";
 import type { HttpResponse } from "./checks/reachable.js";
+import { followRedirects, undiciManualFetch } from "./redirects.js";
 import {
   TLS_CHECK_NAME,
   tlsCheck,
@@ -49,7 +50,7 @@ export type FetchLike = (
 
 /**
  * A Fact: a reported value from a Run that never affects the Verdict
- * (latency, HTTP version, Server header, later the redirect chain).
+ * (latency, HTTP version, Server header, the redirect chain).
  */
 export interface Fact {
   readonly name: string;
@@ -90,16 +91,11 @@ export async function run(
 ): Promise<RunResult> {
   const budgetSeconds = options.timeoutSeconds ?? DEFAULT_BUDGET_SECONDS;
   const budgetMs = budgetSeconds * 1000;
+  // Default transport: follow redirects and collect each hop as Facts
+  // (src/redirects.ts); an injected fetchImpl IS the whole transport.
   const doFetch: FetchLike =
     options.fetchImpl ??
-    ((input, init) =>
-      undiciFetch(input, init).then(async (res) => ({
-        status: res.status,
-        statusText: res.statusText,
-        httpVersion: "httpVersion" in res ? String(res.httpVersion) : undefined,
-        headers: res.headers,
-        body: await res.text(),
-      })));
+    ((input, init) => followRedirects(undiciManualFetch, input, init));
 
   const budgetSignal = AbortSignal.timeout(budgetMs);
   const startedAt = Date.now();
@@ -216,12 +212,19 @@ export async function run(
 }
 
 /**
- * Facts from a completed response. Response time is always present (latency is
- * a Fact, never a check); HTTP version and the Server header appear only when
- * the seam captured them.
+ * Facts from a completed response. The redirect chain is announced one Fact
+ * per hop, name "Redirect", value "<status> <url>" — hop order, first hop
+ * first. Chain hops are Fact-only: they never move the Verdict; the final
+ * destination's grade is what checks carry. Response time is always present
+ * (latency is a Fact, never a check, measured over the whole root fetch
+ * including hops); HTTP version and the Server header appear only when the
+ * seam captured them.
  */
 function factsFor(response: HttpResponse): Fact[] {
   const facts: Fact[] = [];
+  for (const hop of response.redirectHops ?? []) {
+    facts.push({ name: "Redirect", value: `${hop.status} ${hop.location}` });
+  }
   const elapsedMs = Math.round(response.elapsedMs ?? 0);
   facts.push({
     name: "Response time",

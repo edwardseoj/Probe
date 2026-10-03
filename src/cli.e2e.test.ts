@@ -201,4 +201,18 @@ describe("cli output tiers", () => {
     expect(exitCode).toBe(0);
     expect(lines()).toHaveLength(1);
   });
+
+  test("the redirect chain announces per hop under --verbose; the verdict grades the final destination", async () => {
+    const pool = agent.get("https://chain-e2e.test");
+    pool.intercept({ method: "GET", path: "/" }).reply(301, "", {
+      headers: { location: "/landed" },
+    });
+    pool.intercept({ method: "GET", path: "/landed" }).reply(200, "");
+    const exitCode = await main(["https://chain-e2e.test", "--verbose"], {
+      tlsProbe: () => Promise.resolve(validTlsCert),
+    });
+    expect(exitCode).toBe(0);
+    const out = stdout.join("");
+    expect(out).toContain("→ 301 https://chain-e2e.test/landed");
+  });
 });
