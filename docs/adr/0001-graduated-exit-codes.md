@@ -11,3 +11,4 @@ Probe's contract with CI and scripts is that the process exit code mirrors the r
 
 - Exit-code mapping is a published contract: changing it later is a breaking change, not an internal tweak.
 - The verdict→exit mapping is owned by `verdict.ts`; no check may set an exit code directly.
+- Exit 3 is an *outside-the-verdict-model* code for input rejected before a Run begins — see `docs/adr/0002-usage-error-exit-code.md`. It does not amend this mapping; 0/1/2 remain verdict-only.

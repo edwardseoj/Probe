@@ -24,7 +24,7 @@ Flags:
 
 - Accepted schemes: `http://` and `https://` only.
 - Schemeless input (`probe staging.example.com`) gets an implicit `https://` prefix.
-- Any other scheme (`ftp://`, `data:`) is rejected with a clear error before any network I/O.
+- Any other scheme (`ftp://`, `data:`) is rejected with a clear error before any network I/O, with **exit code 3** — usage errors sit outside the verdict model (see `docs/adr/0002-usage-error-exit-code.md`).
 
 ## Checks, Facts, and the Verdict
 
@@ -50,6 +50,12 @@ Latency (with its adjective), HTTP version, `Server` header, the redirect chain.
 - **Healthy** → exit `0`. Everything checked passed; no skips.
 - **Degraded** → exit `1`. reachable-and-sane but showing signs of trouble: failed check, failed point check, error status, TLS trouble short of unreachable, skip due to exhausted run budget.
 - **Unreachable** → exit `2`. The Target could not be reached at all (DNS fault, connection refused, timeout with zero successful I/O), or the Run completed with zero completed checks — no completed evidence of a live Target to grade.
+- **Usage error** → exit `3`, outside the verdict model: invalid input rejected before a Run began (bad scheme, unknown flag). See `docs/adr/0002-usage-error-exit-code.md`.
+
+### Reachable status classes
+
+- 2xx and 3xx pass; all others fail. **1xx counts as fail/Degraded** — an informational-only status reaching the client unchanged is not evidence of a working deployment.
+- Diagnosis status text comes from Node's `http.STATUS_CODES`; a bare `HTTP <code>` (no parenthetical) when the table has no entry.
 
 **Budget exhaustion semantics (confirmed):** Check skips are not check failures. If everything that completed passed but something was skipped, the Verdict is Degraded — incomplete evidence cannot yield full confidence. If nothing completed at all, Verdict is Unreachable.
 
@@ -61,6 +67,17 @@ Latency (with its adjective), HTTP version, `Server` header, the redirect chain.
 - Checks are evaluated in dependency order; after a blocker fails or the budget expires, remaining checks are announced as skipped — never failed, never silent.
 - Redirects: follow, announce the chain (`→ 301 https://…`), grade the final destination.
 - Every network touch honors the shared budget; a check that would exceed it is skipped with a reason line instead of blindly timing out.
+
+## Tracer-bullet scope (T1, issue #2)
+
+The first working slice is smaller than v1; these decisions hold until superseded:
+
+- **Flags in T1**: only `--timeout`. Other flags from the table are not registered at all — `probe --json` errors naturally until its ticket lands. `--timeout` is built now because it is lifecycle machinery (the budget bounds every network call), not output sugar.
+- **Run budget, minimal enforcement**: the network call honors the budget via an abort signal; a triggered abort maps to Unreachable (the target never answered). Per-check skip announcements are deferred until multiple checks share the clock — with one check there is nothing to announce.
+- **Redirects**: followed (default client behavior), and the **final destination is graded** per the standing rule. Announcing the chain (`→ 301 …`) is output polish deferred with Facts.
+- **Network seam**: `run(target, options)` takes the network via injection behind a single fetch-like boundary; tests substitute it (undici MockAgent) rather than opening ports.
+- **Verdict copy**: exactly the BRAND.md lines (`Deployment looks healthy.` / `Deployment is degraded.` / `Could not reach <target>.`).
+- **Tests assert exit codes and glyphs only** (`✓` / `✖`), never human copy — human copy is explicitly not a contract (SPEC.md, "Contract stability").
 
 ## Output
 

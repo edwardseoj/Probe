@@ -57,3 +57,7 @@ _Avoid_: error message, hint, why
 **Run budget**:
 The total wall-clock time a run may spend; when exhausted, remaining checks are skipped and announced, not failed.
 _Avoid_: timeout (reserved for the `--timeout` flag value), deadline
+
+**Usage error**:
+Input rejected before a run can begin (non-HTTP scheme, unknown flag). Not a verdict — no run happened to grade — and reported with exit code 3.
+_Avoid_: validation failure, invalid verdict, exit 2 case

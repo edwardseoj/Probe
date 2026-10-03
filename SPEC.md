@@ -20,7 +20,7 @@ probe <target> [flags]
 
 - Only `http://` and `https://` schemes are accepted.
 - Schemeless input (`probe staging.example.com`) gets an implicit `https://` prefix.
-- Any other scheme (`ftp://`, `data:`) is rejected with a clear error **before any network I/O**.
+- Any other scheme (`ftp://`, `data:`) is rejected with a clear error **before any network I/O**, with exit code 3 (see "Contract stability" and `docs/adr/0002-usage-error-exit-code.md`); usage errors are not verdicts.
 
 ### Flags
 
@@ -61,9 +61,16 @@ A **Run** produces two categories of output:
 | **Degraded** | Reached and responded, but signs of trouble: failed check, failed point check, error status, TLS trouble short of unreachable, or a skip from an exhausted budget | `1` |
 | **Unreachable** | Could not be reached at all (DNS fault, connection refused, timeout with zero successful I/O), or the run completed with zero completed checks | `2` |
 
+Outside the verdict model:
+
+| Situation | Exit code |
+|---|---|
+| **Usage error** — input rejected before a Run could begin (non-HTTP scheme, unknown flag) | `3` |
+
 - **Skips are not failures.** If everything that completed passed but something was skipped, the Verdict is Degraded — incomplete evidence cannot yield full confidence.
 - **Latency never gates the Verdict.**
 - The verdict→exit mapping is owned by the verdict module; no check sets its own exit code. See `docs/adr/0001-graduated-exit-codes.md`.
+- **Usage errors exit `3`, before any network I/O, and outside the verdict→exit mapping** — they are not a Verdict and never pass through it. See `docs/adr/0002-usage-error-exit-code.md`.
 
 ## Output
 
@@ -81,7 +88,7 @@ A **Run** produces two categories of output:
 
 Two different stability classes:
 
-- **Stable contract (breaking changes are version-breaking)**: exit codes (per ADR-0001, this is a published contract), the `--json` shape, flag names and semantics, and the verdict vocabulary (Healthy / Degraded / Unreachable).
+- **Stable contract (breaking changes are version-breaking)**: exit codes (per ADR-0001, this is a published contract; exit 3 for usage errors per ADR-0002), the `--json` shape, flag names and semantics, and the verdict vocabulary (Healthy / Degraded / Unreachable).
 - **Not a contract**: human-facing copy — verdict lines, Diagnosis phrasing, adjectives, glyphs. These may be tuned; scripts must not parse them. Scripts use `--json` or exit codes.
 
 ## Tech stack
