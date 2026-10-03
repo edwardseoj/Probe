@@ -73,7 +73,7 @@ Latency (with its adjective), HTTP version, `Server` header, the redirect chain.
 The first working slice is smaller than v1; these decisions hold until superseded:
 
 - **Flags in T1**: only `--timeout`. Other flags from the table are not registered at all — `probe --json` errors naturally until its ticket lands. `--timeout` is built now because it is lifecycle machinery (the budget bounds every network call), not output sugar.
-- **Run budget, minimal enforcement**: the network call honors the budget via an abort signal; a triggered abort maps to Unreachable (the target never answered). Per-check skip announcements are deferred until multiple checks share the clock — with one check there is nothing to announce.
+- **Run budget, shared and enforcing (T6)**: one shared clock (`AbortSignal.timeout` from `--timeout`, default 10s) bounds every network touch. Checks evaluate in dependency order; a check that would exceed the remaining budget is skipped with a reason line — never blindly timed out into a failure, never silent. Budget-expired aborts are announced as skipped; zero completed checks → Unreachable; verdict derivation lives in `verdict.ts` (`deriveVerdict`), the skip factory in `check.ts` (`skippedCheck`) for the other checks landing in this epic.
 - **Redirects**: followed (default client behavior), and the **final destination is graded** per the standing rule. Announcing the chain (`→ 301 …`) is output polish deferred with Facts.
 - **Network seam**: `run(target, options)` takes the network via injection behind a single fetch-like boundary; tests substitute it (undici MockAgent) rather than opening ports.
 - **Verdict copy**: exactly the BRAND.md lines (`Deployment looks healthy.` / `Deployment is degraded.` / `Could not reach <target>.`).

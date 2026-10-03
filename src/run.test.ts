@@ -19,6 +19,31 @@ function mockPool(origin: string, status: number, headers?: Record<string, strin
   return agent.get(origin).intercept({ method: "GET", path: "/" }).reply(status, "", headers ? { headers } : undefined);
 }
 
+/**
+ * Hangs the request until the run budget's abort signal fires, then rejects
+ * with a fetch-style AbortError — a Target that never answers.
+ */
+function hangsUntilAbort(): FetchLike {
+  return (_input, init) =>
+    new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () =>
+        reject(Object.assign(new Error("This operation was aborted"), { name: "AbortError" })),
+      );
+    });
+}
+
+/** Records whether every call saw the SAME AbortSignal instance (shared clock). */
+function signalCapture(): { signals: AbortSignal[]; fetch: FetchLike } {
+  const signals: AbortSignal[] = [];
+  return {
+    signals: signals,
+    fetch: (_input, init) => {
+      if (init?.signal !== undefined) signals.push(init.signal);
+      return Promise.resolve({ status: 204, statusText: "" });
+    },
+  };
+}
+
 describe("run() over the fetch-like boundary", () => {
   test("2xx grades Healthy", async () => {
     mockPool("https://two.test", 204);
@@ -71,6 +96,7 @@ describe("run() over the fetch-like boundary", () => {
     });
     expect(runResult.verdict).toBe("Unreachable");
     expect(runResult.checks[0].passed).toBe(false);
+    expect(runResult.checks[0].fault).toBe(true);
   });
 
   test("DNS lookup failure maps to Unreachable", async () => {
@@ -83,7 +109,7 @@ describe("run() over the fetch-like boundary", () => {
     expect(runResult.verdict).toBe("Unreachable");
   });
 
-  test("aborted request (budget exhausted) maps to Unreachable", async () => {
+  test("aborted request with zero completed checks maps to Unreachable", async () => {
     const runResult = await run("https://aborted.test", {
       timeoutSeconds: 1,
       fetchImpl: (_input, init) =>
@@ -113,3 +139,25 @@ describe("run() over the fetch-like boundary", () => {
   });
 });
 
+describe("run budget: shared clock across checks", () => {
+  test("every network touch honors the same AbortSignal instance", async () => {
+    const capture = signalCapture();
+    await run("https://shared.test", { fetchImpl: capture.fetch });
+    expect(capture.signals.length).toBeGreaterThanOrEqual(1);
+    const first = capture.signals[0];
+    for (const signal of capture.signals) {
+      expect(signal).toBe(first);
+    }
+  });
+
+  test("budget-expired abort is announced as skipped, never failed", async () => {
+    const runResult = await run("https://slowbudget.test", {
+      timeoutSeconds: 1,
+      fetchImpl: hangsUntilAbort(),
+    });
+    expect(runResult.verdict).toBe("Unreachable");
+    expect(runResult.checks).toHaveLength(1);
+    expect(runResult.checks[0].skipped).toBe(true);
+    expect(runResult.checks[0].fault).toBeUndefined();
+  });
+});

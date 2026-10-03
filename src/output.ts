@@ -6,11 +6,12 @@
 
 import chalk from "chalk";
 import type { RunResult } from "./run.js";
-import type { CheckResult } from "./checks/reachable.js";
+import type { CheckResult } from "./check.js";
 import type { Verdict } from "./verdict.js";
 
 const GLYPH_PASS = "✓";
 const GLYPH_FAIL = "✖";
+const GLYPH_SKIP = "-";
 
 const VERDICT_COPY: Record<Verdict, (target: string) => string> = {
   Healthy: () => "Deployment looks healthy.",
@@ -29,6 +30,11 @@ export function renderRun(runResult: RunResult): string {
 
 function renderCheck(check: CheckResult): string[] {
   const lines: string[] = [];
+  if (check.skipped === true) {
+    const skipCopy = check.skipReason ?? "run budget exhausted";
+    lines.push(chalk.yellow(`${GLYPH_SKIP} Skipped: ${check.name} (${skipCopy})`));
+    return lines;
+  }
   if (check.passed) {
     lines.push(chalk.green(`${GLYPH_PASS} ${check.name}`));
   } else {
