@@ -47,13 +47,31 @@ export type FetchLike = (
   init?: { signal?: AbortSignal },
 ) => Promise<HttpResponse>;
 
+/**
+ * A Fact: a reported value from a Run that never affects the Verdict
+ * (latency, HTTP version, Server header, later the redirect chain).
+ */
+export interface Fact {
+  readonly name: string;
+  readonly value: string;
+}
+
 export interface RunResult {
   readonly target: string;
   readonly verdict: Verdict;
   readonly checks: readonly CheckResult[];
+  /** Present on every completed run (a response answered); absent on faults. */
+  readonly facts?: readonly Fact[];
 }
 
 const DEFAULT_BUDGET_SECONDS = 10;
+
+/**
+ * Latency adjective thresholds — a non-contract tunable (SPEC "Contract
+ * stability"): they shape the Fact's value copy only, never the Verdict.
+ */
+const FAST_MS = 300;
+const OK_MS = 1000;
 
 /**
  * A single unit of network work over the shared budget clock. The check
@@ -78,6 +96,8 @@ export async function run(
       undiciFetch(input, init).then(async (res) => ({
         status: res.status,
         statusText: res.statusText,
+        httpVersion: "httpVersion" in res ? String(res.httpVersion) : undefined,
+        headers: res.headers,
         body: await res.text(),
       })));
 
@@ -93,9 +113,9 @@ export async function run(
     targetUrl = null as unknown as URL;
   }
 
-  // The root response grades multiple checks (Reachable, Content sanity),
-  // so the root fetch is its own step and later steps consume the shared
-  // evidence instead of re-touching the network.
+  // The root response grades multiple checks (Reachable, Content sanity,
+  // Response-time Fact), so the root fetch is its own step and later steps
+  // consume the shared evidence instead of re-touching the network.
   let rootResponse: HttpResponse | undefined;
 
   const steps: CheckStep[] = [
@@ -110,7 +130,15 @@ export async function run(
             code: "ERR_INVALID_URL",
           });
         }
+        // Latency is a Fact, never a check: time the root fetch so the
+        // Response-time Fact can report it (transport-provided elapsedMs
+        // wins when the seam supplies one).
+        const rootFetchStartedAt = performance.now();
         rootResponse = await doFetch(target, { signal: budgetSignal });
+        rootResponse = {
+          ...rootResponse,
+          elapsedMs: rootResponse.elapsedMs ?? performance.now() - rootFetchStartedAt,
+        };
         return reachableCheck(rootResponse);
       },
     },
@@ -177,7 +205,49 @@ export async function run(
     }
   }
 
-  return { target: target, verdict: deriveVerdict(checks), checks: checks };
+  return {
+    target: target,
+    verdict: deriveVerdict(checks),
+    checks: checks,
+    // Facts attach only to completed runs (a root response answered);
+    // faulted runs have no response to report values from.
+    facts: rootResponse !== undefined ? factsFor(rootResponse) : undefined,
+  };
+}
+
+/**
+ * Facts from a completed response. Response time is always present (latency is
+ * a Fact, never a check); HTTP version and the Server header appear only when
+ * the seam captured them.
+ */
+function factsFor(response: HttpResponse): Fact[] {
+  const facts: Fact[] = [];
+  const elapsedMs = Math.round(response.elapsedMs ?? 0);
+  facts.push({
+    name: "Response time",
+    value: `${elapsedMs} ms (${latencyAdjective(elapsedMs)})`,
+  });
+
+  if (response.httpVersion !== undefined) {
+    facts.push({ name: "HTTP version", value: response.httpVersion });
+  }
+
+  const server = response.headers?.get("server");
+  if (server !== null && server !== undefined && server !== "") {
+    facts.push({ name: "Server", value: server });
+  }
+
+  return facts;
+}
+
+function latencyAdjective(elapsedMs: number): "fast" | "ok" | "slow" {
+  if (elapsedMs < FAST_MS) {
+    return "fast";
+  }
+  if (elapsedMs < OK_MS) {
+    return "ok";
+  }
+  return "slow";
 }
 
 /**

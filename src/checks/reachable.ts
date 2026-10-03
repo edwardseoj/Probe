@@ -10,15 +10,22 @@ import type { CheckResult } from "../check.js";
 
 export type { CheckResult } from "../check.js";
 
+/**
+ * The HTTP seam shape run() hands to checks. Every field past status/statusText
+ * is optional and additive — a transport fills what it can (ticket #8 owns this
+ * shape; other tickets extend options/additively and reconcile at merge).
+ *
+ * - `httpVersion` / `headers` / `body`: captured when the transport provides them.
+ * - `elapsedMs`: transport-provided response timing; run() falls back to its own
+ *   wall clock when the seam omits it.
+ */
 export interface HttpResponse {
   status: number;
   statusText: string;
-  /**
-   * Optional response body, read when available so body-sniffing checks can
-   * inspect it. Additive widening per the epic-2 contract; #8 (T2) owns the
-   * type's final shape.
-   */
+  httpVersion?: string;
+  headers?: { get(name: string): string | null };
   body?: string;
+  elapsedMs?: number;
 }
 
 export function reachableCheck(response: HttpResponse): CheckResult {
@@ -27,23 +34,24 @@ export function reachableCheck(response: HttpResponse): CheckResult {
 
 /**
  * Shared status-class grading (2xx/3xx pass) used by Reachable and point
- * checks alike; Diagnosis text reuses Node's STATUS_CODES table.
+ * checks alike; passing checks carry verbose-tier detail, failing ones a
+ * Diagnosis reusing Node's STATUS_CODES table.
  */
 export function statusClassCheck(name: string, response: HttpResponse): CheckResult {
   const ok = response.status >= 200 && response.status < 400;
 
   if (ok) {
-    return { name: name, passed: true };
+    return { name: name, passed: true, detail: statusLine(response.status) };
   }
 
   return {
     name: name,
     passed: false,
-    diagnosis: diagnosisFor(response.status),
+    diagnosis: statusLine(response.status),
   };
 }
 
-function diagnosisFor(status: number): string {
+function statusLine(status: number): string {
   const statusText = STATUS_CODES[status];
   if (statusText === undefined) {
     return `HTTP ${status}`;

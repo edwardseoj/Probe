@@ -18,6 +18,11 @@ export interface CheckResult {
   passed: boolean;
   /** The one-line Diagnosis when a graded check fails. Absent when passing. */
   diagnosis?: string;
+  /**
+   * Verbose-tier detail for passing checks; never rendered in the default
+   * tier (ticket #8 owns presentation).
+   */
+  detail?: string;
   /** The check never ran because the run budget was exhausted (or a blocker failed). */
   skipped?: boolean;
   /** The check never produced evidence to grade: network fault / abort before an answer. */
