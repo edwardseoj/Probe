@@ -78,6 +78,44 @@ describe("cli exit seam", () => {
     expect(exitCode).toBe(0);
   });
 
+  test("--path repeats: a check line per point check, verdict stays exit-code driven", async () => {
+    const pool = agent.get("https://multi.test");
+    pool.intercept({ method: "GET", path: "/" }).reply(204, "");
+    pool.intercept({ method: "GET", path: "/health" }).reply(200, "");
+    pool.intercept({ method: "GET", path: "/ready" }).reply(200, "");
+    const exitCode = await main(["https://multi.test", "--path", "/health", "--path", "/ready"]);
+    expect(exitCode).toBe(0);
+    const out = stdout.join("");
+    expect(out).toContain("Point check /health");
+    expect(out).toContain("Point check /ready");
+    expect(out).toContain("✓");
+  });
+
+  test("a failing point check degrades: exit 1 with a fail glyph on that path's line", async () => {
+    const pool = agent.get("https://pointdown.test");
+    pool.intercept({ method: "GET", path: "/" }).reply(204, "");
+    pool.intercept({ method: "GET", path: "/health" }).reply(503, "");
+    const exitCode = await main(["https://pointdown.test", "--path", "/health"]);
+    expect(exitCode).toBe(1);
+    const out = stdout.join("");
+    expect(out).toContain("Point check /health");
+    expect(out).toContain("✖");
+  });
+
+  test("a point check path not starting with / is a usage error: exit 3, stderr, zero network", async () => {
+    const exitCode = await main(["https://badpath.test", "--path", "health"]);
+    expect(exitCode).toBe(3);
+    expect(stderr.join("")).toContain("--path");
+    expect(stdout.join("")).toBe("");
+  });
+
+  test("an empty --path value is a usage error: exit 3", async () => {
+    const exitCode = await main(["https://emptypath.test", "--path", ""]);
+    expect(exitCode).toBe(3);
+    expect(stderr.join("")).toContain("--path");
+    expect(stdout.join("")).toBe("");
+  });
+
   test("unknown flag is a usage error: exit 3", async () => {
     const exitCode = await main(["https://healthy.test", "--verbose"]);
     expect(exitCode).toBe(3);

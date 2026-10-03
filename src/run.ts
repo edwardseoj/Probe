@@ -10,6 +10,7 @@
 import { fetch as undiciFetch } from "undici";
 import { reachableCheck } from "./checks/reachable.js";
 import type { HttpResponse, CheckResult } from "./checks/reachable.js";
+import { pointCheck } from "./checks/point.js";
 import type { Verdict } from "./verdict.js";
 
 export type { Verdict } from "./verdict.js";
@@ -18,6 +19,8 @@ export { exitCodeFor } from "./verdict.js";
 export interface RunOptions {
   readonly fetchImpl?: FetchLike;
   readonly timeoutSeconds?: number;
+  /** Health paths from repeatable --path; one Point check per path. */
+  readonly paths?: readonly string[];
 }
 
 export type FetchLike = (
@@ -55,9 +58,44 @@ export async function run(
     return faultResult(target, error);
   }
 
-  const check = reachableCheck(response);
-  const verdict: Verdict = check.passed ? "Healthy" : "Degraded";
-  return { target: target, verdict: verdict, checks: [check] };
+  const rootCheck = reachableCheck(response);
+  const checks: CheckResult[] = [rootCheck];
+
+  for (const path of options.paths ?? []) {
+    checks.push(await pointCheckResult(`${target}${path}`, path, doFetch, budgetSignal));
+  }
+
+  // Skips are not failures; a failing check (or skip) degrades the verdict.
+  // T6 owns the shared deriveVerdict helper; until its shape lands on this
+  // branch, the derivation stays inline with the same semantics.
+  const verdict: Verdict = checks.every((c) => c.passed) ? "Healthy" : "Degraded";
+  return { target: target, verdict: verdict, checks: checks };
+}
+
+/**
+ * One point check per path through the same fetch seam and the same
+ * budget signal as the root check. A root failure means the target never
+ * resolved, so no point check runs — they need a live target to mean
+ * anything (skip machinery is T6's; the fault side expresses the minimal
+ * skip shape here).
+ */
+async function pointCheckResult(
+  url: string,
+  path: string,
+  doFetch: FetchLike,
+  budgetSignal: AbortSignal,
+): Promise<CheckResult> {
+  try {
+    const response = await doFetch(url, { signal: budgetSignal });
+    return pointCheck(response, path);
+  } catch {
+    return {
+      name: `Point check ${path}`,
+      passed: false,
+      skipped: true,
+      skipReason: "run budget exhausted",
+    };
+  }
 }
 
 function faultResult(target: string, error: unknown): RunResult {
