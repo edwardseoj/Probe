@@ -13,7 +13,15 @@ import { renderRun } from "./output.js";
 
 export const USAGE_EXIT_CODE = 3;
 
-export async function main(argv: string[]): Promise<number> {
+/**
+ * The CLI's own network boundaries (undici global dispatcher, node:tls)
+ * are the defaults; runOptions overrides exist for the test seam the same
+ * way run() takes fetchImpl/tlsProbe. The --timeout flag always wins.
+ */
+export async function main(
+  argv: string[],
+  runOptions?: Partial<RunOptions>,
+): Promise<number> {
   const program = new Command();
   program
     .name("probe")
@@ -50,7 +58,10 @@ export async function main(argv: string[]): Promise<number> {
     return USAGE_EXIT_CODE;
   }
 
-  const options: RunOptions = { timeoutSeconds: timeoutSeconds };
+  const options: RunOptions = {
+    ...runOptions,
+    timeoutSeconds: timeoutSeconds,
+  };
   const runResult = await run(validated, options);
   process.stdout.write(renderRun(runResult));
   return exitCodeFor(runResult.verdict);

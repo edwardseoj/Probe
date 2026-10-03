@@ -1,10 +1,22 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { MockAgent, setGlobalDispatcher } from "undici";
 import { main } from "./cli.js";
+import type { TlsCertInfo } from "./checks/tls.js";
 
 const agent = new MockAgent();
 agent.disableNetConnect();
 setGlobalDispatcher(agent);
+
+/**
+ * Cert-shaped fixture for the TLS probe boundary: tests never open real
+ * sockets — every https run that survives Reachable receives the probe
+ * seam instead of the default node:tls one.
+ */
+const validTlsCert: TlsCertInfo = {
+  validFrom: "Jan 1 00:00:00 2020 GMT",
+  validTo: "Jan 1 00:00:00 2030 GMT",
+  hostnameMatches: true,
+};
 
 let stdout: string[];
 let stderr: string[];
@@ -34,14 +46,18 @@ afterEach(() => {
 describe("cli exit seam", () => {
   test("healthy 2xx target exits 0 with a pass glyph", async () => {
     agent.get("https://healthy.test").intercept({ method: "GET", path: "/" }).reply(204, "");
-    const exitCode = await main(["https://healthy.test"]);
+    const exitCode = await main(["https://healthy.test"], {
+      tlsProbe: () => Promise.resolve(validTlsCert),
+    });
     expect(exitCode).toBe(0);
     expect(stdout.join("")).toContain("✓");
   });
 
   test("5xx target exits 1 with a fail glyph", async () => {
     agent.get("https://broken.test").intercept({ method: "GET", path: "/" }).reply(502, "");
-    const exitCode = await main(["https://broken.test"]);
+    const exitCode = await main(["https://broken.test"], {
+      tlsProbe: () => Promise.resolve(validTlsCert),
+    });
     expect(exitCode).toBe(1);
     expect(stdout.join("")).toContain("✖");
   });
@@ -67,14 +83,18 @@ describe("cli exit seam", () => {
 
   test("schemeless input gets an implicit https:// prefix and runs", async () => {
     agent.get("https://schemeless.test").intercept({ method: "GET", path: "/" }).reply(204, "");
-    const exitCode = await main(["schemeless.test"]);
+    const exitCode = await main(["schemeless.test"], {
+      tlsProbe: () => Promise.resolve(validTlsCert),
+    });
     expect(exitCode).toBe(0);
     expect(stdout.join("")).toContain("✓");
   });
 
   test("--timeout <s> is accepted", async () => {
     agent.get("https://timed.test").intercept({ method: "GET", path: "/" }).reply(204, "");
-    const exitCode = await main(["https://timed.test", "--timeout", "5"]);
+    const exitCode = await main(["https://timed.test", "--timeout", "5"], {
+      tlsProbe: () => Promise.resolve(validTlsCert),
+    });
     expect(exitCode).toBe(0);
   });
 

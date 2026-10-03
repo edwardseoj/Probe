@@ -21,6 +21,7 @@ export interface HttpResponse {
   body?: string;
 }
 
+
 export function reachableCheck(response: HttpResponse): CheckResult {
   const name = "Reachable";
   const ok = response.status >= 200 && response.status < 400;

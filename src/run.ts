@@ -1,9 +1,10 @@
 /**
  * run(target, options) -> RunResult is the orchestrator seam: Target +
  * options in, verdict/checks out. The network is injected behind a single
- * fetch-like boundary (default wraps undici's fetch). No check ever sets an
- * exit code; the verdict module owns verdict derivation and the verdict ->
- * exit mapping (ADR-0001).
+ * fetch-like boundary (default wraps undici's fetch) and the TLS probe
+ * behind a tls-probe-like boundary (default runs node:tls out-of-band —
+ * see checks/tls.ts). No check ever sets an exit code; the verdict module
+ * owns verdict derivation and the verdict -> exit mapping (ADR-0001).
  *
  * Run budget: ONE shared clock (AbortSignal.timeout) bounds every network
  * touch. Checks run in dependency order over that clock; a check that never
@@ -15,6 +16,13 @@ import { fetch as undiciFetch } from "undici";
 import { reachableCheck } from "./checks/reachable.js";
 import { contentSanityCheck } from "./checks/content-sanity.js";
 import type { HttpResponse } from "./checks/reachable.js";
+import {
+  TLS_CHECK_NAME,
+  tlsCheck,
+  plainHttpTlsCheck,
+  defaultTlsProbe,
+} from "./checks/tls.js";
+import type { TlsProbe } from "./checks/tls.js";
 import { skippedCheck, faultedCheck, isCompleted } from "./check.js";
 import type { CheckResult } from "./check.js";
 import { deriveVerdict } from "./verdict.js";
@@ -28,6 +36,7 @@ export type { CheckResult } from "./check.js";
 export interface RunOptions {
   readonly fetchImpl?: FetchLike;
   readonly timeoutSeconds?: number;
+  readonly tlsProbe?: TlsProbe;
 }
 
 export type FetchLike = (
@@ -45,8 +54,9 @@ const DEFAULT_BUDGET_SECONDS = 10;
 
 /**
  * A single unit of network work over the shared budget clock. The check
- * performs its fetches against `signal`; returning a CheckResult grades it.
- * Tickets adding checks to the epic register them here as sequenced steps.
+ * performs its fetches/probes against `signal`; returning a CheckResult
+ * grades it. Tickets adding checks to the epic register them here as
+ * sequenced steps.
  */
 interface CheckStep {
   readonly name: string;
@@ -58,6 +68,7 @@ export async function run(
   options: RunOptions = {},
 ): Promise<RunResult> {
   const budgetSeconds = options.timeoutSeconds ?? DEFAULT_BUDGET_SECONDS;
+  const budgetMs = budgetSeconds * 1000;
   const doFetch: FetchLike =
     options.fetchImpl ??
     ((input, init) =>
@@ -67,7 +78,17 @@ export async function run(
         body: await res.text(),
       })));
 
-  const budgetSignal = AbortSignal.timeout(budgetSeconds * 1000);
+  const budgetSignal = AbortSignal.timeout(budgetMs);
+  const startedAt = Date.now();
+
+  let targetUrl: URL;
+  try {
+    targetUrl = new URL(target);
+  } catch {
+    // Scheme validation is the CLI's job pre-network (usage error, exit 3);
+    // run() defensively grades an unparseable Target like a fault, as before.
+    targetUrl = null as unknown as URL;
+  }
 
   // The root response grades multiple checks (Reachable, Content sanity),
   // so the root fetch is its own step and later steps consume the shared
@@ -78,6 +99,14 @@ export async function run(
     {
       name: "Reachable",
       perform: async () => {
+        if (targetUrl === null) {
+          // Scheme validation is the CLI's job pre-network (usage error,
+          // exit 3); run() defensively grades an unparseable Target as a
+          // fault, as before.
+          throw Object.assign(new Error("invalid target URL"), {
+            code: "ERR_INVALID_URL",
+          });
+        }
         rootResponse = await doFetch(target, { signal: budgetSignal });
         return reachableCheck(rootResponse);
       },
@@ -85,6 +114,33 @@ export async function run(
     {
       name: "Content sanity",
       perform: async () => contentSanityCheck(rootResponse as HttpResponse),
+    },
+    {
+      name: TLS_CHECK_NAME,
+      perform: async () => {
+        // HTTPS/TLS (ticket #4): https Targets get one out-of-band TLS
+        // probe graded shallowly (validity window + hostname, no chain
+        // walking). TLS trouble degrades — it never maps to Unreachable,
+        // so probe failures are graded here, never thrown. Plain-HTTP
+        // Targets pass trivially with a note (pinned in checks/tls.ts).
+        if (targetUrl !== null && targetUrl.protocol === "https:") {
+          try {
+            const cert = await (options.tlsProbe ?? defaultTlsProbe)({
+              hostname: targetUrl.hostname,
+              port: Number(targetUrl.port) || 443,
+              timeoutMs: budgetMs - (Date.now() - startedAt),
+            });
+            return tlsCheck(cert);
+          } catch (error) {
+            return {
+              name: TLS_CHECK_NAME,
+              passed: false,
+              diagnosis: probeFailureDiagnosis(error),
+            };
+          }
+        }
+        return plainHttpTlsCheck();
+      },
     },
   ];
 
@@ -115,6 +171,14 @@ export async function run(
   }
 
   return { target: target, verdict: deriveVerdict(checks), checks: checks };
+}
+
+function probeFailureDiagnosis(error: unknown): string {
+  const code = (error as { code?: string })?.code;
+  if (code === "TLS_PROBE_TIMEOUT") {
+    return "TLS probe timed out";
+  }
+  return "TLS handshake failed";
 }
 
 /**
