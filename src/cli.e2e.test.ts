@@ -79,7 +79,7 @@ describe("cli exit seam", () => {
   });
 
   test("unknown flag is a usage error: exit 3", async () => {
-    const exitCode = await main(["https://healthy.test", "--verbose"]);
+    const exitCode = await main(["https://healthy.test", "--bogus"]);
     expect(exitCode).toBe(3);
     expect(stdout.join("")).toBe("");
   });
@@ -87,5 +87,49 @@ describe("cli exit seam", () => {
   test("missing target is a usage error: exit 3", async () => {
     const exitCode = await main([]);
     expect(exitCode).toBe(3);
+  });
+});
+
+describe("cli output tiers", () => {
+  function lines(): string[] {
+    return stdout.join("").split("\n").filter((line) => line.length > 0);
+  }
+
+  test("default output stays check lines + verdict: no Facts, no pass detail", async () => {
+    agent.get("https://tier-default.test").intercept({ method: "GET", path: "/" }).reply(204, "", {
+      headers: { server: "nginx" },
+    });
+    const exitCode = await main(["https://tier-default.test"]);
+    expect(exitCode).toBe(0);
+    expect(lines()).toHaveLength(2);
+    expect(stdout.join("")).not.toContain("nginx");
+    expect(stdout.join("")).not.toContain("Response time");
+  });
+
+  test("--verbose adds Facts and passing-check detail", async () => {
+    agent.get("https://tier-verbose.test").intercept({ method: "GET", path: "/" }).reply(204, "", {
+      headers: { server: "nginx" },
+    });
+    const exitCode = await main(["https://tier-verbose.test", "--verbose"]);
+    expect(exitCode).toBe(0);
+    // pass glyph, pass detail, Fact lines (latency + Server), verdict
+    expect(lines().length).toBeGreaterThan(2);
+    expect(stdout.join("")).toContain("nginx");
+    expect(stdout.join("")).toContain("Response time");
+  });
+
+  test("--quiet prints only the Verdict line, exit code unchanged", async () => {
+    agent.get("https://tier-quiet.test").intercept({ method: "GET", path: "/" }).reply(502, "");
+    const exitCode = await main(["https://tier-quiet.test", "--quiet"]);
+    expect(exitCode).toBe(1);
+    expect(lines()).toHaveLength(1);
+    expect(stdout.join("")).not.toContain("✖");
+  });
+
+  test("--quiet wins over --verbose when both are given", async () => {
+    agent.get("https://tier-both.test").intercept({ method: "GET", path: "/" }).reply(204, "");
+    const exitCode = await main(["https://tier-both.test", "--verbose", "--quiet"]);
+    expect(exitCode).toBe(0);
+    expect(lines()).toHaveLength(1);
   });
 });

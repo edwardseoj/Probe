@@ -7,15 +7,30 @@
 
 import { STATUS_CODES } from "node:http";
 
+/**
+ * The HTTP seam shape run() hands to checks. Every field past status/statusText
+ * is optional and additive — a transport fills what it can (ticket #8 owns this
+ * shape; other tickets extend options/additively and reconcile at merge).
+ *
+ * - `httpVersion` / `headers` / `body`: captured when the transport provides them.
+ * - `elapsedMs`: transport-provided response timing; run() falls back to its own
+ *   wall clock when the seam omits it.
+ */
 export interface HttpResponse {
   status: number;
   statusText: string;
+  httpVersion?: string;
+  headers?: { get(name: string): string | null };
+  body?: string;
+  elapsedMs?: number;
 }
 
 export interface CheckResult {
   name: string;
   passed: boolean;
   diagnosis?: string;
+  /** Verbose-tier detail for passing checks; never rendered in the default tier. */
+  detail?: string;
 }
 
 export function reachableCheck(response: HttpResponse): CheckResult {
@@ -23,17 +38,17 @@ export function reachableCheck(response: HttpResponse): CheckResult {
   const ok = response.status >= 200 && response.status < 400;
 
   if (ok) {
-    return { name: name, passed: true };
+    return { name: name, passed: true, detail: statusLine(response.status) };
   }
 
   return {
     name: name,
     passed: false,
-    diagnosis: diagnosisFor(response.status),
+    diagnosis: statusLine(response.status),
   };
 }
 
-function diagnosisFor(status: number): string {
+function statusLine(status: number): string {
   const statusText = STATUS_CODES[status];
   if (statusText === undefined) {
     return `HTTP ${status}`;

@@ -10,6 +10,7 @@ import { run } from "./run.js";
 import { exitCodeFor } from "./verdict.js";
 import type { RunOptions } from "./run.js";
 import { renderRun } from "./output.js";
+import type { OutputMode } from "./output.js";
 
 export const USAGE_EXIT_CODE = 3;
 
@@ -20,14 +21,19 @@ export async function main(argv: string[]): Promise<number> {
     .description("Post-deployment sanity check. Deploy, run Probe, know.")
     .argument("<target>", "HTTP(S) target to check")
     .option("--timeout <seconds>", "Run budget in seconds (default 10)", "10")
+    .option("--verbose", "Add Facts and passing-check detail to the default output")
+    .option("--quiet", "Print only the Verdict line")
     .exitOverride();
 
   let target: string;
   let timeoutRaw: string;
+  let mode: OutputMode;
   try {
     program.parse(argv, { from: "user" });
+    const flags = program.opts<{ timeout?: string; verbose?: boolean; quiet?: boolean }>();
     target = program.args[0];
-    timeoutRaw = program.opts<{ timeout?: string }>().timeout ?? "10";
+    timeoutRaw = flags.timeout ?? "10";
+    mode = flags.quiet ? "quiet" : flags.verbose ? "verbose" : "default";
   } catch (error) {
     if (
       error instanceof CommanderError &&
@@ -52,7 +58,7 @@ export async function main(argv: string[]): Promise<number> {
 
   const options: RunOptions = { timeoutSeconds: timeoutSeconds };
   const runResult = await run(validated, options);
-  process.stdout.write(renderRun(runResult));
+  process.stdout.write(renderRun(runResult, mode));
   return exitCodeFor(runResult.verdict);
 }
 

@@ -51,4 +51,16 @@ describe("Reachable", () => {
     const check = reachableCheck(responseFixture(502));
     expect(Object.keys(check)).not.toContain("exitCode");
   });
+
+  test("carries passing-check detail on a pass for the verbose tier", () => {
+    const check = reachableCheck(responseFixture(204));
+    expect(check.passed).toBe(true);
+    expect(check.detail).toBeDefined();
+    expect(check.detail).toContain("HTTP 204");
+  });
+
+  test("carries no passing-check detail on a fail (the Diagnosis carries it)", () => {
+    const check = reachableCheck(responseFixture(502));
+    expect(check.detail).toBeUndefined();
+  });
 });

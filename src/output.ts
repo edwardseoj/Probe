@@ -5,7 +5,7 @@
  */
 
 import chalk from "chalk";
-import type { RunResult } from "./run.js";
+import type { RunResult, Fact } from "./run.js";
 import type { CheckResult } from "./checks/reachable.js";
 import type { Verdict } from "./verdict.js";
 
@@ -18,19 +18,35 @@ const VERDICT_COPY: Record<Verdict, (target: string) => string> = {
   Unreachable: (target) => `Could not reach ${target}.`,
 };
 
-export function renderRun(runResult: RunResult): string {
+/**
+ * Output tiers (ticket #8 owns this signature):
+ * - default: check lines + verdict line. No Facts, no passing-check detail.
+ * - verbose: default output + Facts + passing-check detail. Strictly opt-in.
+ * - quiet: verdict line only. Exit codes are unaffected by the mode.
+ */
+export type OutputMode = "default" | "verbose" | "quiet";
+
+export function renderRun(runResult: RunResult, mode: OutputMode = "default"): string {
   const lines: string[] = [];
-  for (const check of runResult.checks) {
-    lines.push(...renderCheck(check));
+  if (mode !== "quiet") {
+    for (const check of runResult.checks) {
+      lines.push(...renderCheck(check, mode));
+    }
+    if (mode === "verbose" && runResult.facts !== undefined) {
+      lines.push(...runResult.facts.map(renderFact));
+    }
   }
   lines.push(renderVerdictLine(runResult.verdict, runResult.target));
   return lines.join("\n") + "\n";
 }
 
-function renderCheck(check: CheckResult): string[] {
+function renderCheck(check: CheckResult, mode: OutputMode): string[] {
   const lines: string[] = [];
   if (check.passed) {
     lines.push(chalk.green(`${GLYPH_PASS} ${check.name}`));
+    if (mode === "verbose" && check.detail !== undefined) {
+      lines.push(chalk.dim(`  ${check.detail}`));
+    }
   } else {
     lines.push(chalk.red(`${GLYPH_FAIL} ${check.name}`));
     if (check.diagnosis !== undefined) {
@@ -38,6 +54,10 @@ function renderCheck(check: CheckResult): string[] {
     }
   }
   return lines;
+}
+
+function renderFact(fact: Fact): string {
+  return chalk.dim(`  ${fact.name}: ${fact.value}`);
 }
 
 function renderVerdictLine(verdict: Verdict, target: string): string {

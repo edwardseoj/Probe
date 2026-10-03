@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { MockAgent, setGlobalDispatcher } from "undici";
 import { run } from "./run.js";
-import type { FetchLike, RunResult } from "./run.js";
+import type { FetchLike, Fact, RunResult } from "./run.js";
 import type { HttpResponse } from "./checks/reachable.js";
 
 const agent = new MockAgent();
@@ -110,6 +110,102 @@ describe("run() over the fetch-like boundary", () => {
       },
     });
     expect(sawSignal).toBe(true);
+  });
+});
+
+describe("Facts on completed runs (never gate the verdict)", () => {
+  function fact(runResult: RunResult, name: string): Fact | undefined {
+    return runResult.facts?.find((candidate) => candidate.name === name);
+  }
+
+  test("every completed run carries a response-time Fact with a fast/ok/slow adjective", async () => {
+    mockPool("https://facts.test", 204);
+    const runResult = await run("https://facts.test");
+    const responseTime = fact(runResult, "Response time");
+    expect(responseTime).toBeDefined();
+    expect(responseTime?.value).toMatch(/^\d+ ms \((fast|ok|slow)\)$/);
+  });
+
+  test("a failing completed run still carries the response-time Fact", async () => {
+    mockPool("https://facts-fail.test", 502);
+    const runResult = await run("https://facts-fail.test");
+    expect(runResult.verdict).toBe("Degraded");
+    expect(fact(runResult, "Response time")).toBeDefined();
+  });
+
+  test("an Unreachable run carries no Facts (no response answered)", async () => {
+    const runResult = await run("https://facts-refused.test", {
+      fetchImpl: () => Promise.reject(new Error("connect ECONNREFUSED 127.0.0.1:443")),
+    });
+    expect(runResult.facts).toBeUndefined();
+  });
+
+  test("Server header is captured as a Fact when present", async () => {
+    const runResult = await run("https://server.test", {
+      fetchImpl: () =>
+        Promise.resolve({
+          status: 204,
+          statusText: "No Content",
+          headers: { get: (n) => (n === "server" ? "nginx" : null) },
+        } as HttpResponse),
+    });
+    expect(fact(runResult, "Server")?.value).toBe("nginx");
+  });
+
+  test("no Server Fact when the header is absent", async () => {
+    mockPool("https://no-server.test", 204);
+    const runResult = await run("https://no-server.test");
+    expect(fact(runResult, "Server")).toBeUndefined();
+  });
+
+  test("HTTP version is captured as a Fact when available", async () => {
+    const runResult = await run("https://version.test", {
+      fetchImpl: () =>
+        Promise.resolve({ status: 204, statusText: "No Content", httpVersion: "HTTP/1.1" } as HttpResponse),
+    });
+    expect(fact(runResult, "HTTP version")?.value).toBe("HTTP/1.1");
+  });
+
+  test("no HTTP version Fact when the seam provides none", async () => {
+    mockPool("https://no-version.test", 204);
+    const runResult = await run("https://no-version.test");
+    expect(fact(runResult, "HTTP version")).toBeUndefined();
+  });
+
+  test.each([
+    [250, "fast"],
+    [500, "ok"],
+    [1500, "slow"],
+  ])("latency adjective thresholds: %i ms -> %s", async (elapsedMs, adjective) => {
+    const runResult = await run("https://latency.test", {
+      fetchImpl: () =>
+        Promise.resolve(
+          Object.assign({ status: 204, statusText: "No Content" }, { elapsedMs }) as HttpResponse,
+        ),
+    });
+    expect(fact(runResult, "Response time")?.value).toContain(String(elapsedMs));
+    expect(fact(runResult, "Response time")?.value).toContain(adjective);
+  });
+
+  test("a slow response never moves the Verdict (latency is a Fact, not a check)", async () => {
+    const runResult = await run("https://slow-but-up.test", {
+      fetchImpl: () =>
+        Promise.resolve(
+          Object.assign({ status: 204, statusText: "No Content" }, { elapsedMs: 5000 }) as HttpResponse,
+        ),
+    });
+    expect(runResult.verdict).toBe("Healthy");
+    expect(fact(runResult, "Response time")?.value).toContain("slow");
+  });
+
+  test("transport-provided timing is preferred over the run wall clock", async () => {
+    const runResult = await run("https://timing.test", {
+      fetchImpl: () =>
+        Promise.resolve(
+          Object.assign({ status: 204, statusText: "No Content" }, { elapsedMs: 137 }) as HttpResponse,
+        ),
+    });
+    expect(fact(runResult, "Response time")?.value).toContain("137 ms");
   });
 });
 
