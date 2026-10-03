@@ -1,0 +1,56 @@
+{
+  "skills-lock.json": {
+    "mtime": 1791043014.806705,
+    "seen": 1791043493.5755646,
+    "ast_hash": "ee6028d4ce75f2278eb88920d7c9aa42",
+    "semantic_hash": "ee6028d4ce75f2278eb88920d7c9aa42"
+  },
+  ".agents/skills/ask-matt/PHASE-BOUNDARIES.md": {
+    "mtime": 1791043014.799329,
+    "seen": 1791043493.5755703,
+    "ast_hash": "62a5e8babd13307489cae896b8e1640b",
+    "semantic_hash": "62a5e8babd13307489cae896b8e1640b"
+  },
+  ".agents/skills/ask-matt/SKILL.md": {
+    "mtime": 1791043014.799329,
+    "seen": 1791043493.575573,
+    "ast_hash": "e8b9c9c7dc8a6717dc03cced104f358e",
+    "semantic_hash": "e8b9c9c7dc8a6717dc03cced104f358e"
+  },
+  ".agents/skills/ask-matt/agents/openai.yaml": {
+    "mtime": 1791043014.7993722,
+    "seen": 1791043493.575574,
+    "ast_hash": "d3bb94e3fa14e921edcc984fcc8ddbe7",
+    "semantic_hash": "d3bb94e3fa14e921edcc984fcc8ddbe7"
+  },
+  "AGENTS.md": {
+    "mtime": 1791042414.621185,
+    "seen": 1791043493.5755754,
+    "ast_hash": "020d62e4748b519c8588ade28cf9c551",
+    "semantic_hash": "020d62e4748b519c8588ade28cf9c551"
+  },
+  "README.md": {
+    "mtime": 1791040040.1371205,
+    "seen": 1791043493.5755763,
+    "ast_hash": "6b840c77b4eb250a9406d6d264ec03ea",
+    "semantic_hash": "6b840c77b4eb250a9406d6d264ec03ea"
+  },
+  "docs/agents/domain.md": {
+    "mtime": 1791042436.049874,
+    "seen": 1791043493.5755775,
+    "ast_hash": "00bededcb4486406f018b39e9902c610",
+    "semantic_hash": "00bededcb4486406f018b39e9902c610"
+  },
+  "docs/agents/issue-tracker.md": {
+    "mtime": 1791042427.4659986,
+    "seen": 1791043493.5755787,
+    "ast_hash": "bc2168abde89351811b657336d84d00b",
+    "semantic_hash": "bc2168abde89351811b657336d84d00b"
+  },
+  "docs/agents/triage-labels.md": {
+    "mtime": 1791042430.0269616,
+    "seen": 1791043493.5755796,
+    "ast_hash": "22add54cb98451c55b20e6b7992d4a85",
+    "semantic_hash": "22add54cb98451c55b20e6b7992d4a85"
+  }
+}
