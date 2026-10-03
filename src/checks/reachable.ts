@@ -16,6 +16,12 @@ export interface CheckResult {
   name: string;
   passed: boolean;
   diagnosis?: string;
+  /**
+   * Structured note for checks that pass-with-note (e.g. the plain-HTTP
+   * HTTPS/TLS check); optional, added by ticket #4. Presentation rules for
+   * notes and Facts are owned by the output tickets — copy is not a contract.
+   */
+  note?: string;
 }
 
 export function reachableCheck(response: HttpResponse): CheckResult {
