@@ -6,16 +6,13 @@
  */
 
 import { STATUS_CODES } from "node:http";
+import type { CheckResult } from "../check.js";
+
+export type { CheckResult } from "../check.js";
 
 export interface HttpResponse {
   status: number;
   statusText: string;
-}
-
-export interface CheckResult {
-  name: string;
-  passed: boolean;
-  diagnosis?: string;
 }
 
 export function reachableCheck(response: HttpResponse): CheckResult {
