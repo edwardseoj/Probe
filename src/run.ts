@@ -13,6 +13,7 @@
 
 import { fetch as undiciFetch } from "undici";
 import { reachableCheck } from "./checks/reachable.js";
+import { contentSanityCheck } from "./checks/content-sanity.js";
 import type { HttpResponse } from "./checks/reachable.js";
 import { skippedCheck, faultedCheck, isCompleted } from "./check.js";
 import type { CheckResult } from "./check.js";
@@ -60,17 +61,30 @@ export async function run(
   const doFetch: FetchLike =
     options.fetchImpl ??
     ((input, init) =>
-      undiciFetch(input, init).then((res) => ({
+      undiciFetch(input, init).then(async (res) => ({
         status: res.status,
         statusText: res.statusText,
+        body: await res.text(),
       })));
 
   const budgetSignal = AbortSignal.timeout(budgetSeconds * 1000);
 
+  // The root response grades multiple checks (Reachable, Content sanity),
+  // so the root fetch is its own step and later steps consume the shared
+  // evidence instead of re-touching the network.
+  let rootResponse: HttpResponse | undefined;
+
   const steps: CheckStep[] = [
     {
       name: "Reachable",
-      perform: async () => reachableCheck(await doFetch(target, { signal: budgetSignal })),
+      perform: async () => {
+        rootResponse = await doFetch(target, { signal: budgetSignal });
+        return reachableCheck(rootResponse);
+      },
+    },
+    {
+      name: "Content sanity",
+      perform: async () => contentSanityCheck(rootResponse as HttpResponse),
     },
   ];
 

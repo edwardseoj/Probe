@@ -49,10 +49,49 @@ describe("run() over the fetch-like boundary", () => {
     mockPool("https://two.test", 204);
     const runResult: RunResult = await run("https://two.test");
     expect(runResult.verdict).toBe("Healthy");
-    expect(runResult.checks).toHaveLength(1);
+    expect(runResult.checks).toHaveLength(2);
     expect(runResult.checks[0].passed).toBe(true);
     expect(runResult.checks[0].name).toBe("Reachable");
+    expect(runResult.checks[1].name).toBe("Content sanity");
+    expect(runResult.checks[1].passed).toBe(true);
+    expect(runResult.checks[1].diagnosis).toBeUndefined();
   });
+
+  test("200 with an error-page body degrades the verdict with a failing Content sanity check", async () => {
+    agent.get("https://brownout.test").intercept({ method: "GET", path: "/" }).reply(
+      200,
+      "<html><body>Application Error</body></html>",
+    );
+    const runResult = await run("https://brownout.test");
+    expect(runResult.verdict).toBe("Degraded");
+    const sanity = runResult.checks.find((c) => c.name === "Content sanity");
+    expect(sanity).toBeDefined();
+    expect(sanity?.passed).toBe(false);
+    expect(sanity?.diagnosis).toBeDefined();
+  });
+
+  test("200 with a clean body stays Healthy with no Diagnosis on Content sanity", async () => {
+    agent.get("https://cleanbody.test").intercept({ method: "GET", path: "/" }).reply(
+      200,
+      "<html><body>Welcome</body></html>",
+    );
+    const runResult = await run("https://cleanbody.test");
+    expect(runResult.verdict).toBe("Healthy");
+    const sanity = runResult.checks.find((c) => c.name === "Content sanity");
+    expect(sanity?.passed).toBe(true);
+    expect(sanity?.diagnosis).toBeUndefined();
+  });
+
+  test("Content sanity passes silently when no body is available", async () => {
+    const runResult = await run("https://nobody.test", {
+      fetchImpl: () =>
+        Promise.resolve({ status: 200, statusText: "OK" } as HttpResponse),
+    });
+    expect(runResult.verdict).toBe("Healthy");
+    const sanity = runResult.checks.find((c) => c.name === "Content sanity");
+    expect(sanity?.passed).toBe(true);
+  });
+
 
   test("3xx following to a 2xx destination grades Healthy at the final destination", async () => {
     const pool = agent.get("https://redirect.test");
@@ -156,8 +195,10 @@ describe("run budget: shared clock across checks", () => {
       fetchImpl: hangsUntilAbort(),
     });
     expect(runResult.verdict).toBe("Unreachable");
-    expect(runResult.checks).toHaveLength(1);
-    expect(runResult.checks[0].skipped).toBe(true);
-    expect(runResult.checks[0].fault).toBeUndefined();
+    expect(runResult.checks).toHaveLength(2);
+    for (const check of runResult.checks) {
+      expect(check.skipped).toBe(true);
+      expect(check.fault).toBeUndefined();
+    }
   });
 });
