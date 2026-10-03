@@ -118,7 +118,7 @@ describe("run() over the fetch-like boundary", () => {
   });
 
 
-  test("3xx following to a 2xx destination grades Healthy at the final destination", async () => {
+  test("3xx following to a 2xx destination grades Healthy at the final destination, chain announced as Facts", async () => {
     const pool = agent.get("https://redirect.test");
     pool.intercept({ method: "GET", path: "/" }).reply(301, "", {
       headers: { location: "https://redirect.test/landed" },
@@ -128,6 +128,95 @@ describe("run() over the fetch-like boundary", () => {
       tlsProbe: probeOver(validTlsCert),
     });
     expect(runResult.verdict).toBe("Healthy");
+    const hops = runResult.facts?.filter((f) => f.name === "Redirect");
+    expect(hops).toHaveLength(1);
+    expect(hops?.[0].value).toBe("301 https://redirect.test/landed");
+  });
+
+  test("multi-hop chain announced per hop in hop order, Facts only, verdict grades the final destination", async () => {
+    const pool = agent.get("https://chain.test");
+    pool.intercept({ method: "GET", path: "/" }).reply(302, "", {
+      headers: { location: "/moved" },
+    });
+    pool.intercept({ method: "GET", path: "/moved" }).reply(301, "", {
+      headers: { location: "/landed" },
+    });
+    pool.intercept({ method: "GET", path: "/landed" }).reply(200, "", {
+      headers: { server: "chain-nginx" },
+    });
+    const runResult = await run("https://chain.test", {
+      tlsProbe: probeOver(validTlsCert),
+    });
+    // Chain hops never move the Verdict: the 2xx destination grades it.
+    expect(runResult.verdict).toBe("Healthy");
+    const hops = runResult.facts?.filter((f) => f.name === "Redirect");
+    expect(hops).toHaveLength(2);
+    expect(hops?.[0].value).toBe("302 https://chain.test/moved");
+    expect(hops?.[1].value).toBe("301 https://chain.test/landed");
+    // Server/HTTP-version Facts come from the final destination, not the hops.
+    expect(
+      runResult.facts?.find((f) => f.name === "Server")?.value,
+    ).toBe("chain-nginx");
+  });
+
+  test("redirect to another host: hop announced, final destination graded", async () => {
+    agent.get("https://from.test").intercept({ method: "GET", path: "/" }).reply(
+      308,
+      "",
+      { headers: { location: "https://elsewhere.test/there" } },
+    );
+    agent
+      .get("https://elsewhere.test")
+      .intercept({ method: "GET", path: "/there" })
+      .reply(200, "");
+    const runResult = await run("https://from.test", {
+      tlsProbe: probeOver(validTlsCert),
+    });
+    expect(runResult.verdict).toBe("Healthy");
+    const hops = runResult.facts?.filter((f) => f.name === "Redirect");
+    expect(hops).toHaveLength(1);
+    expect(hops?.[0].value).toBe("308 https://elsewhere.test/there");
+  });
+
+  test("final destination failing degrades with a Diagnosis, chain still announced", async () => {
+    const pool = agent.get("https://chainfail.test");
+    pool.intercept({ method: "GET", path: "/" }).reply(302, "", {
+      headers: { location: "/gone" },
+    });
+    pool.intercept({ method: "GET", path: "/gone" }).reply(404, "");
+    const runResult = await run("https://chainfail.test", {
+      tlsProbe: probeOver(validTlsCert),
+    });
+    expect(runResult.verdict).toBe("Degraded");
+    expect(runResult.checks[0].passed).toBe(false);
+    expect(runResult.checks[0].diagnosis).toContain("HTTP 404");
+    const hops = runResult.facts?.filter((f) => f.name === "Redirect");
+    expect(hops).toHaveLength(1);
+    expect(hops?.[0].value).toBe("302 https://chainfail.test/gone");
+  });
+
+  test("a non-redirect 3xx (no Location) is graded directly with no hop Facts", async () => {
+    mockPool("https://bare3xx.test", 304);
+    const runResult = await run("https://bare3xx.test", {
+      tlsProbe: probeOver(validTlsCert),
+    });
+    expect(runResult.verdict).toBe("Healthy");
+    expect(runResult.facts?.filter((f) => f.name === "Redirect")).toHaveLength(0);
+  });
+
+  test("a redirect loop past the hop cap faults like fetch's own guard (no hang)", async () => {
+    agent
+      .get("https://loop.test")
+      .intercept({ method: "GET", path: "/" })
+      .reply(301, "", { headers: { location: "https://loop.test/" } })
+      .times(40);
+    const runResult = await run("https://loop.test", {
+      timeoutSeconds: 5,
+      tlsProbe: probeOver(validTlsCert),
+    });
+    expect(runResult.verdict).toBe("Unreachable");
+    expect(runResult.checks[0].fault).toBe(true);
+    expect(runResult.facts).toBeUndefined();
   });
 
   test("4xx fails the check (Degraded) with a Diagnosis", async () => {
