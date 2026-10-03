@@ -140,6 +140,35 @@ describe("cli exit seam", () => {
     expect(stdout.join("")).toBe("");
   });
 
+  test("budget exhausted mid-run: exit 1, skipped point checks announced with the skip glyph", async () => {
+    // --timeout is integer-only at the CLI, so the smallest deterministic
+    // budget is 1s: the root answers instantly, the point fetch hangs until
+    // the shared budget clock aborts it (worst case ~1s, never flaky).
+    const exitCode = await main(
+      ["https://midrun-e2e.test", "--timeout", "1", "--path", "/health"],
+      {
+        tlsProbe: () => Promise.resolve(validTlsCert),
+        fetchImpl: (input, init) => {
+          if (new URL(input).pathname === "/") {
+            return Promise.resolve({ status: 204, statusText: "" });
+          }
+          return new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () =>
+              reject(
+                Object.assign(new Error("This operation was aborted"), {
+                  name: "AbortError",
+                }),
+              ),
+            );
+          });
+        },
+      },
+    );
+    expect(exitCode).toBe(1);
+    const out = stdout.join("");
+    expect(out).toContain("- Skipped:");
+  });
+
   test("unknown flag is a usage error: exit 3", async () => {
     const exitCode = await main(["https://healthy.test", "--bogus"]);
     expect(exitCode).toBe(3);

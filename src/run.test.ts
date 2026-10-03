@@ -320,6 +320,67 @@ describe("run budget: shared clock across checks", () => {
     for (const check of runResult.checks) {
       expect(check.skipped).toBe(true);
       expect(check.fault).toBeUndefined();
+      // Truthful wrt cause: budget expiry, not a check failure — the reason
+      // carries no failed-check name.
+      expect(check.skipReason).toBeDefined();
+      expect(check.skipReason).not.toContain("Reachable");
+    }
+  });
+
+  test("budget exhausted mid-run (later network touch overruns): remaining checks skipped with reasons, verdict Degraded", async () => {
+    const runResult = await run("https://midrun.test", {
+      timeoutSeconds: 0.2,
+      paths: ["/health", "/ready"],
+      tlsProbe: probeOver(validTlsCert),
+      fetchImpl: (input, init) => {
+        // The root answers immediately; every later network touch hangs
+        // until the shared budget clock aborts it.
+        if (new URL(input).pathname === "/") {
+          return Promise.resolve({ status: 204, statusText: "" });
+        }
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(
+              Object.assign(new Error("This operation was aborted"), {
+                name: "AbortError",
+              }),
+            ),
+          );
+        });
+      },
+    });
+    expect(runResult.verdict).toBe("Degraded");
+    for (const name of ["Point check /health", "Point check /ready"]) {
+      const skipped = runResult.checks.find((c) => c.name === name);
+      expect(skipped?.skipped).toBe(true);
+      expect(skipped?.skipReason).toBeDefined();
+    }
+  });
+});
+
+describe("skip reasons state the true cause", () => {
+  test("after a graded failure, remaining checks are skipped with a reason naming the failed check", async () => {
+    const runResult = await run("https://blocker.test", {
+      paths: ["/health"],
+      fetchImpl: () => Promise.resolve({ status: 404, statusText: "" }),
+    });
+    expect(runResult.verdict).toBe("Degraded");
+    for (const check of runResult.checks.slice(1)) {
+      expect(check.skipped).toBe(true);
+      expect(check.skipReason).toContain("Reachable");
+    }
+  });
+
+  test("after a faulted check, remaining checks are skipped with a reason naming the faulted check", async () => {
+    const runResult = await run("https://blocker-fault.test", {
+      paths: ["/health"],
+      fetchImpl: () =>
+        Promise.reject(new Error("connect ECONNREFUSED 127.0.0.1:443")),
+    });
+    expect(runResult.verdict).toBe("Unreachable");
+    for (const check of runResult.checks.slice(1)) {
+      expect(check.skipped).toBe(true);
+      expect(check.skipReason).toContain("Reachable");
     }
   });
 });
@@ -678,6 +739,46 @@ describe("Facts on completed runs (never gate the verdict)", () => {
     mockPool("https://no-version.test", 204);
     const runResult = await run("https://no-version.test", {
       tlsProbe: probeOver(validTlsCert),
+    });
+    expect(fact(runResult, "HTTP version")).toBeUndefined();
+  });
+
+  test("HTTP version composed from the probe's negotiated ALPN when the transport reports none", async () => {
+    const runResult = await run("https://alpn-h2.test", {
+      tlsProbe: probeOver({ ...validTlsCert, alpnProtocol: "h2" }),
+      fetchImpl: () =>
+        Promise.resolve({ status: 204, statusText: "" } as HttpResponse),
+    });
+    expect(fact(runResult, "HTTP version")?.value).toBe("HTTP/2");
+  });
+
+  test("no ALPN negotiation over https still reports HTTP/1.1 from the probe", async () => {
+    const runResult = await run("https://alpn-empty.test", {
+      tlsProbe: probeOver({ ...validTlsCert, alpnProtocol: "" }),
+      fetchImpl: () =>
+        Promise.resolve({ status: 204, statusText: "" } as HttpResponse),
+    });
+    expect(fact(runResult, "HTTP version")?.value).toBe("HTTP/1.1");
+  });
+
+  test("a transport-provided httpVersion wins over the ALPN approximation", async () => {
+    const runResult = await run("https://alpn-transport.test", {
+      tlsProbe: probeOver({ ...validTlsCert, alpnProtocol: "h2" }),
+      fetchImpl: () =>
+        Promise.resolve({
+          status: 204,
+          statusText: "",
+          httpVersion: "HTTP/1.1",
+        } as HttpResponse),
+    });
+    expect(fact(runResult, "HTTP version")?.value).toBe("HTTP/1.1");
+  });
+
+  test("a probe-less TLS fixture carries no ALPN and yields no HTTP version Fact", async () => {
+    const runResult = await run("https://alpn-absent.test", {
+      tlsProbe: probeOver(validTlsCert),
+      fetchImpl: () =>
+        Promise.resolve({ status: 204, statusText: "" } as HttpResponse),
     });
     expect(fact(runResult, "HTTP version")).toBeUndefined();
   });

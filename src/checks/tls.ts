@@ -30,6 +30,15 @@ export interface TlsCertInfo {
   readonly validFrom: string;
   readonly validTo: string;
   readonly hostnameMatches: boolean;
+  /**
+   * The ALPN protocol negotiated on the probe's own TLS connection
+   * (`socket.alpnProtocol`), e.g. "h2", "http/1.1", or "" when nothing was
+   * negotiated. Additive: this describes the probe connection, a shallow
+   * approximation of the graded fetch's HTTP version (they can differ);
+   * run.ts composes the HTTP version Fact from it only when the transport
+   * reports no version itself.
+   */
+  readonly alpnProtocol?: string;
 }
 
 export interface TlsProbeInput {
@@ -124,6 +133,8 @@ export const defaultTlsProbe: TlsProbe = ({ hostname, port, timeoutMs }) => {
         validFrom: cert.valid_from,
         validTo: cert.valid_to,
         hostnameMatches: socket.authorized,
+        alpnProtocol:
+          typeof socket.alpnProtocol === "string" ? socket.alpnProtocol : "",
       });
     });
 

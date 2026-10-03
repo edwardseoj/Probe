@@ -100,28 +100,27 @@ export async function run(
   const budgetSignal = AbortSignal.timeout(budgetMs);
   const startedAt = Date.now();
 
-  let targetUrl: URL;
+  let targetUrl: URL | null = null;
   try {
     targetUrl = new URL(target);
   } catch {
     // Scheme validation is the CLI's job pre-network (usage error, exit 3);
     // run() defensively grades an unparseable Target like a fault, as before.
-    targetUrl = null as unknown as URL;
   }
 
   // The root response grades multiple checks (Reachable, Content sanity,
   // Response-time Fact), so the root fetch is its own step and later steps
   // consume the shared evidence instead of re-touching the network.
   let rootResponse: HttpResponse | undefined;
+  // ALPN negotiated by the out-of-band TLS probe, captured from the probe
+  // step (see factsFor for how the HTTP version Fact composes from it).
+  let alpnProtocol: string | undefined;
 
   const steps: CheckStep[] = [
     {
       name: "Reachable",
       perform: async () => {
         if (targetUrl === null) {
-          // Scheme validation is the CLI's job pre-network (usage error,
-          // exit 3); run() defensively grades an unparseable Target as a
-          // fault, as before.
           throw Object.assign(new Error("invalid target URL"), {
             code: "ERR_INVALID_URL",
           });
@@ -153,6 +152,11 @@ export async function run(
               port: Number(targetUrl.port) || 443,
               timeoutMs: budgetMs - (Date.now() - startedAt),
             });
+            // The probe connection's negotiated ALPN (additive on the cert
+            // shape) feeds the HTTP version Fact when the transport reports
+            // none — a shallow approximation of the graded fetch, so the
+            // transport-provided value always wins in factsFor.
+            alpnProtocol = cert.alpnProtocol;
             return tlsCheck(cert);
           } catch (error) {
             return {
@@ -173,10 +177,21 @@ export async function run(
   ];
 
   const checks: CheckResult[] = [];
-  let blocker = false;
+  /**
+   * Set by the check that blocked the run (graded failure or fault); the
+   * remaining steps are then skipped with a reason naming it — the true
+   * cause, never the default budget reason. Budget expiry still wins when
+   * the clock is gone: those skips are genuine budget-expiry skips.
+   */
+  let blockerReason: string | undefined;
   for (const step of steps) {
-    if (blocker || budgetSignal.aborted) {
+    if (budgetSignal.aborted) {
+      // Genuine budget exhaustion: skippedCheck's default reason.
       checks.push(skippedCheck(step.name));
+      continue;
+    }
+    if (blockerReason !== undefined) {
+      checks.push(skippedCheck(step.name, blockerReason));
       continue;
     }
     try {
@@ -186,7 +201,7 @@ export async function run(
       // faulted check results announce missing evidence without starving
       // later steps of their own turn.
       if (isCompleted(check) && !check.passed) {
-        blocker = true;
+        blockerReason = `${check.name} failed`;
       }
     } catch (error) {
       if (budgetExpired(budgetSignal, error)) {
@@ -196,7 +211,7 @@ export async function run(
         checks.push(skippedCheck(step.name));
       } else {
         checks.push(faultedCheck(step.name, faultDiagnosis(error)));
-        blocker = true;
+        blockerReason = `${step.name} faulted`;
       }
     }
   }
@@ -207,9 +222,18 @@ export async function run(
     checks: checks,
     // Facts attach only to completed runs (a root response answered);
     // faulted runs have no response to report values from.
-    facts: rootResponse !== undefined ? factsFor(rootResponse) : undefined,
+    facts:
+      rootResponse !== undefined
+        ? factsFor(rootResponse, alpnProtocol)
+        : undefined,
   };
 }
+
+/**
+ * The redirect chain announces one Fact per hop; both run.ts (producers) and
+ * output.ts (presenter) key on this single name.
+ */
+export const REDIRECT_FACT_NAME = "Redirect";
 
 /**
  * Facts from a completed response. The redirect chain is announced one Fact
@@ -217,13 +241,26 @@ export async function run(
  * first. Chain hops are Fact-only: they never move the Verdict; the final
  * destination's grade is what checks carry. Response time is always present
  * (latency is a Fact, never a check, measured over the whole root fetch
- * including hops); HTTP version and the Server header appear only when the
- * seam captured them.
+ * including hops); HTTP version and the Server header appear only when a
+ * source captured them.
+ *
+ * HTTP version composition (additive, transport first): a transport-provided
+ * httpVersion always wins. Otherwise, over https the out-of-band TLS probe
+ * negotiated a protocol on its own connection — a shallow approximation of
+ * the graded fetch (they can differ; see checks/tls.ts): "h2" reports
+ * HTTP/2, anything else (including empty) reports HTTP/1.1. No probe result
+ * or plain-HTTP Target: no HTTP version Fact.
  */
-function factsFor(response: HttpResponse): Fact[] {
+function factsFor(
+  response: HttpResponse,
+  alpnProtocol: string | undefined,
+): Fact[] {
   const facts: Fact[] = [];
   for (const hop of response.redirectHops ?? []) {
-    facts.push({ name: "Redirect", value: `${hop.status} ${hop.location}` });
+    facts.push({
+      name: REDIRECT_FACT_NAME,
+      value: `${hop.status} ${hop.location}`,
+    });
   }
   const elapsedMs = Math.round(response.elapsedMs ?? 0);
   facts.push({
@@ -231,8 +268,9 @@ function factsFor(response: HttpResponse): Fact[] {
     value: `${elapsedMs} ms (${latencyAdjective(elapsedMs)})`,
   });
 
-  if (response.httpVersion !== undefined) {
-    facts.push({ name: "HTTP version", value: response.httpVersion });
+  const httpVersion = response.httpVersion ?? versionFromAlpn(alpnProtocol);
+  if (httpVersion !== undefined) {
+    facts.push({ name: "HTTP version", value: httpVersion });
   }
 
   const server = response.headers?.get("server");
@@ -241,6 +279,13 @@ function factsFor(response: HttpResponse): Fact[] {
   }
 
   return facts;
+}
+
+function versionFromAlpn(alpnProtocol: string | undefined): string | undefined {
+  if (alpnProtocol === undefined) {
+    return undefined;
+  }
+  return alpnProtocol === "h2" ? "HTTP/2" : "HTTP/1.1";
 }
 
 function latencyAdjective(elapsedMs: number): "fast" | "ok" | "slow" {
@@ -283,11 +328,32 @@ function buildPointCheckSteps(
 }
 
 function probeFailureDiagnosis(error: unknown): string {
-  const code = (error as { code?: string })?.code;
-  if (code === "TLS_PROBE_TIMEOUT") {
+  if (errorShape(error).code === "TLS_PROBE_TIMEOUT") {
     return "TLS probe timed out";
   }
   return "TLS handshake failed";
+}
+
+/**
+ * One place for the error-introspection shape the fault mapping uses: the
+ * error's own name/code plus whatever name/code its `cause` carries
+ * (transports wrap aborts and connect faults in causes).
+ */
+function errorShape(error: unknown): {
+  name?: string;
+  code?: string;
+  causeName?: string;
+  causeCode?: string;
+} {
+  const cast = error as
+    | { name?: string; code?: string; cause?: { name?: string; code?: string } }
+    | undefined;
+  return {
+    name: error instanceof Error ? error.name : undefined,
+    code: cast?.code,
+    causeName: cast?.cause?.name,
+    causeCode: cast?.cause?.code,
+  };
 }
 
 /**
@@ -299,29 +365,24 @@ function budgetExpired(signal: AbortSignal, error: unknown): boolean {
   if (signal.aborted) {
     return true;
   }
-  const cause =
-    error instanceof Error && "cause" in error
-      ? (error.cause as { name?: string })
-      : undefined;
-  const name = error instanceof Error ? error.name : undefined;
-  return name === "AbortError" || cause?.name === "AbortError";
+  const shape = errorShape(error);
+  return shape.name === "AbortError" || shape.causeName === "AbortError";
 }
 
 function faultDiagnosis(error: unknown): string {
-  const cause =
-    error instanceof Error && "cause" in error
-      ? (error.cause as { code?: string; name?: string; message?: string })
-      : undefined;
-  const name = error instanceof Error ? error.name : undefined;
+  const shape = errorShape(error);
 
-  if (name === "AbortError" || cause?.name === "AbortError") {
+  if (shape.name === "AbortError" || shape.causeName === "AbortError") {
     return "Request timed out";
   }
-  if (name === "ConnectTimeoutError" || cause?.name === "ConnectTimeoutError") {
+  if (
+    shape.name === "ConnectTimeoutError" ||
+    shape.causeName === "ConnectTimeoutError"
+  ) {
     return "Request timed out";
   }
 
-  const code = (error as { code?: string })?.code ?? cause?.code;
+  const code = shape.code ?? shape.causeCode;
   if (code === "ECONNREFUSED") {
     return "Connection refused";
   }
