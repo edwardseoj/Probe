@@ -10,6 +10,12 @@ import { STATUS_CODES } from "node:http";
 export interface HttpResponse {
   status: number;
   statusText: string;
+  /**
+   * Optional response body, read when available so body-sniffing checks can
+   * inspect it. Additive widening per the epic-2 contract; #8 (T2) owns the
+   * type's final shape.
+   */
+  body?: string;
 }
 
 export interface CheckResult {

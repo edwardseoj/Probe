@@ -9,6 +9,7 @@
 
 import { fetch as undiciFetch } from "undici";
 import { reachableCheck } from "./checks/reachable.js";
+import { contentSanityCheck } from "./checks/content-sanity.js";
 import type { HttpResponse, CheckResult } from "./checks/reachable.js";
 import type { Verdict } from "./verdict.js";
 
@@ -41,9 +42,10 @@ export async function run(
   const doFetch: FetchLike =
     options.fetchImpl ??
     ((input, init) =>
-      undiciFetch(input, init).then((res) => ({
+      undiciFetch(input, init).then(async (res) => ({
         status: res.status,
         statusText: res.statusText,
+        body: await res.text(),
       })));
 
   const budgetSignal = AbortSignal.timeout(budgetSeconds * 1000);
@@ -55,9 +57,15 @@ export async function run(
     return faultResult(target, error);
   }
 
-  const check = reachableCheck(response);
-  const verdict: Verdict = check.passed ? "Healthy" : "Degraded";
-  return { target: target, verdict: verdict, checks: [check] };
+  // One network touch per run today; point checks and their skip
+  // announcements (run budget exhausted) are ticket #6 (T6) machinery —
+  // no parallel skip machinery here.
+  const checks: CheckResult[] = [reachableCheck(response), contentSanityCheck(response)];
+  // Verdict derivation stays inline until #6 (T6) lands deriveVerdict in
+  // verdict.ts; do not hand-roll a second mapping — Healthy means every
+  // check passed, anything else is Degraded (zero completed is #6's).
+  const verdict: Verdict = checks.every((check) => check.passed) ? "Healthy" : "Degraded";
+  return { target: target, verdict: verdict, checks: checks };
 }
 
 function faultResult(target: string, error: unknown): RunResult {
