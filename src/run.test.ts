@@ -72,9 +72,9 @@ describe("run() over the fetch-like boundary", () => {
     expect(runResult.checks).toHaveLength(3);
     expect(runResult.checks[0].passed).toBe(true);
     expect(runResult.checks[0].name).toBe("Reachable");
-    expect(runResult.checks[1].name).toBe("Content sanity");
-    expect(runResult.checks[1].passed).toBe(true);
-    expect(runResult.checks[1].diagnosis).toBeUndefined();
+    expect(runResult.checks[2].name).toBe("Content sanity");
+    expect(runResult.checks[2].passed).toBe(true);
+    expect(runResult.checks[2].diagnosis).toBeUndefined();
   });
 
   test("200 with an error-page body degrades the verdict with a failing Content sanity check", async () => {
@@ -82,7 +82,9 @@ describe("run() over the fetch-like boundary", () => {
       200,
       "<html><body>Application Error</body></html>",
     );
-    const runResult = await run("https://brownout.test");
+    const runResult = await run("https://brownout.test", {
+      tlsProbe: probeOver(validTlsCert),
+    });
     expect(runResult.verdict).toBe("Degraded");
     const sanity = runResult.checks.find((c) => c.name === "Content sanity");
     expect(sanity).toBeDefined();
@@ -245,12 +247,11 @@ describe("HTTPS/TLS check on run()", () => {
     });
     expect(runResult.checks.map((check) => check.name)).toEqual([
       "Reachable",
-      "Content sanity",
       TLS_CHECK_NAME,
+      "Content sanity",
     ]);
-    expect(runResult.checks[2].passed).toBe(true);
+    expect(runResult.checks[1].passed).toBe(true);
   });
-
   test("a valid certificate on https grades Healthy", async () => {
     const runResult = await run("https://healthy.test", {
       fetchImpl: () => Promise.resolve(response204()),
@@ -268,7 +269,7 @@ describe("HTTPS/TLS check on run()", () => {
       }),
     });
     expect(runResult.verdict).toBe("Degraded");
-    const tlsCheckLine = runResult.checks[2];
+    const tlsCheckLine = runResult.checks[1];
     expect(tlsCheckLine.name).toBe(TLS_CHECK_NAME);
     expect(tlsCheckLine.passed).toBe(false);
     expect(tlsCheckLine.diagnosis).toBeDefined();
@@ -283,8 +284,8 @@ describe("HTTPS/TLS check on run()", () => {
       }),
     });
     expect(runResult.verdict).toBe("Degraded");
-    expect(runResult.checks[2].passed).toBe(false);
-    expect(runResult.checks[2].diagnosis).toBeDefined();
+    expect(runResult.checks[1].passed).toBe(false);
+    expect(runResult.checks[1].diagnosis).toBeDefined();
   });
 
   test("a hostname mismatch degrades", async () => {
@@ -293,8 +294,8 @@ describe("HTTPS/TLS check on run()", () => {
       tlsProbe: probeOver({ ...validTlsCert, hostnameMatches: false }),
     });
     expect(runResult.verdict).toBe("Degraded");
-    expect(runResult.checks[2].passed).toBe(false);
-    expect(runResult.checks[2].diagnosis).toBeDefined();
+    expect(runResult.checks[1].passed).toBe(false);
+    expect(runResult.checks[1].diagnosis).toBeDefined();
   });
 
   test("a failed TLS probe degrades — TLS trouble never grades Unreachable", async () => {
@@ -303,8 +304,8 @@ describe("HTTPS/TLS check on run()", () => {
       tlsProbe: () => Promise.reject(new Error("TLS handshake failed")),
     });
     expect(runResult.verdict).toBe("Degraded");
-    expect(runResult.checks[2].passed).toBe(false);
-    expect(runResult.checks[2].diagnosis).toBeDefined();
+    expect(runResult.checks[1].passed).toBe(false);
+    expect(runResult.checks[1].diagnosis).toBeDefined();
   });
 
   test("a TLS probe kept inside the budget never gates on latency", async () => {
@@ -328,7 +329,7 @@ describe("HTTPS/TLS check on run()", () => {
     expect(probeCalled).toBe(false);
     expect(runResult.verdict).toBe("Healthy");
     expect(runResult.checks).toHaveLength(3);
-    const tlsCheckLine = runResult.checks[2];
+    const tlsCheckLine = runResult.checks[1];
     expect(tlsCheckLine.name).toBe(TLS_CHECK_NAME);
     expect(tlsCheckLine.passed).toBe(true);
     expect(tlsCheckLine.note).toBeDefined();
@@ -390,6 +391,138 @@ describe("HTTPS/TLS check on run()", () => {
     expect(probed.timeoutMs).toBeUndefined();
     const tlsCheckLine = runResult.checks.find((c) => c.name === TLS_CHECK_NAME);
     expect(tlsCheckLine?.skipped).toBe(true);
+  });
+});
+
+describe("run() with point checks (paths)", () => {
+  test("one check per supplied path, each fetched and named per path", async () => {
+    const pool = agent.get("https://points.test");
+    pool.intercept({ method: "GET", path: "/" }).reply(204, "");
+    pool.intercept({ method: "GET", path: "/health" }).reply(200, "");
+    pool.intercept({ method: "GET", path: "/ready" }).reply(200, "");
+    const runResult: RunResult = await run("https://points.test", {
+      paths: ["/health", "/ready"],
+      tlsProbe: probeOver(validTlsCert),
+    });
+    expect(runResult.checks).toHaveLength(5);
+    expect(runResult.checks.map((c) => c.name)).toEqual([
+      "Reachable",
+      TLS_CHECK_NAME,
+      "Content sanity",
+      "Point check /health",
+      "Point check /ready",
+    ]);
+    expect(runResult.verdict).toBe("Healthy");
+  });
+
+  test("each point check is its own fetch against its own path", async () => {
+    const pool = agent.get("https://distinct.test");
+    pool.intercept({ method: "GET", path: "/" }).reply(204, "");
+    pool.intercept({ method: "GET", path: "/health" }).reply(200, "");
+    const seenPaths: string[] = [];
+    const runResult = await run("https://distinct.test", {
+      paths: ["/health"],
+      tlsProbe: probeOver(validTlsCert),
+      fetchImpl: async (input) => {
+        seenPaths.push(new URL(input).pathname);
+        if (new URL(input).pathname === "/") {
+          return { status: 204, statusText: "" };
+        }
+        return { status: 200, statusText: "" };
+      },
+    });
+    expect(seenPaths).toEqual(["/", "/health"]);
+    expect(runResult.verdict).toBe("Healthy");
+    expect(runResult.checks).toHaveLength(4);
+    expect(runResult.checks[3].name).toBe("Point check /health");
+    expect(runResult.checks[3].passed).toBe(true);
+  });
+
+  test("a failing point check among passing root checks degrades the verdict", async () => {
+    const pool = agent.get("https://degradedpoint.test");
+    pool.intercept({ method: "GET", path: "/" }).reply(204, "");
+    pool.intercept({ method: "GET", path: "/health" }).reply(200, "");
+    pool.intercept({ method: "GET", path: "/ready" }).reply(503, "");
+    const runResult = await run("https://degradedpoint.test", {
+      paths: ["/health", "/ready"],
+      tlsProbe: probeOver(validTlsCert),
+    });
+    expect(runResult.verdict).toBe("Degraded");
+    expect(runResult.checks).toHaveLength(5);
+    const ready = runResult.checks.find((c) => c.name === "Point check /ready");
+    expect(ready?.passed).toBe(false);
+    expect(ready?.diagnosis).toContain("HTTP 503");
+  });
+
+  test("the root Reachable check failing takes precedence: Unreachable-style fault, point checks skipped", async () => {
+    const runResult = await run("https://pointsrefused.test", {
+      paths: ["/health"],
+      fetchImpl: () => Promise.reject(new Error("connect ECONNREFUSED 127.0.0.1:443")),
+    });
+    expect(runResult.verdict).toBe("Unreachable");
+    expect(runResult.checks[0].name).toBe("Reachable");
+    expect(runResult.checks[0].fault).toBe(true);
+    for (const check of runResult.checks.slice(1)) {
+      expect(check.skipped).toBe(true);
+    }
+  });
+
+  test("a point check failing with an HTTP error status (root passing) is Degraded, not Unreachable", async () => {
+    const pool = agent.get("https://selfdegraded.test");
+    pool.intercept({ method: "GET", path: "/" }).reply(204, "");
+    pool.intercept({ method: "GET", path: "/down" }).reply(500, "");
+    const runResult = await run("https://selfdegraded.test", {
+      paths: ["/down"],
+      tlsProbe: probeOver(validTlsCert),
+    });
+    expect(runResult.verdict).toBe("Degraded");
+  });
+
+  test("point checks share the run budget signal", async () => {
+    const signals: (AbortSignal | undefined)[] = [];
+    const runResult = await run("https://sharedbudget.test", {
+      paths: ["/health"],
+      tlsProbe: probeOver(validTlsCert),
+      fetchImpl: async (_input, init) => {
+        signals.push(init?.signal);
+        return { status: 200, statusText: "" };
+      },
+    });
+    expect(runResult.verdict).toBe("Healthy");
+    expect(signals).toHaveLength(2);
+    expect(signals[0]).toBeInstanceOf(AbortSignal);
+    expect(signals[1]).toBe(signals[0]);
+  });
+
+  test("a point check whose fetch faults is skipped, not failed", async () => {
+    const runResult = await run("https://pointfault.test", {
+      paths: ["/health"],
+      tlsProbe: probeOver(validTlsCert),
+      fetchImpl: async (input) => {
+        if (new URL(input).pathname === "/") {
+          return { status: 204, statusText: "" };
+        }
+        throw Object.assign(new Error("getaddrinfo ENOTFOUND pointfault.test"), {
+          code: "ENOTFOUND",
+        });
+      },
+    });
+    expect(runResult.checks).toHaveLength(4);
+    const point = runResult.checks.find((c) => c.name === "Point check /health");
+    expect(point?.passed).toBe(false);
+    expect(point?.skipped).toBe(true);
+    expect(point?.skipReason).toContain("DNS lookup failed");
+    expect(runResult.verdict).toBe("Degraded");
+  });
+
+  test("no paths: identical to the single-check run", async () => {
+    mockPool("https://nopath.test", 204);
+    const runResult = await run("https://nopath.test", {
+      tlsProbe: probeOver(validTlsCert),
+    });
+    expect(runResult.checks).toHaveLength(3);
+    expect(runResult.checks[0].name).toBe("Reachable");
+    expect(runResult.verdict).toBe("Healthy");
   });
 });
 

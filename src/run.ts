@@ -23,6 +23,7 @@ import {
   defaultTlsProbe,
 } from "./checks/tls.js";
 import type { TlsProbe } from "./checks/tls.js";
+import { pointCheck } from "./checks/point.js";
 import { skippedCheck, faultedCheck, isCompleted } from "./check.js";
 import type { CheckResult } from "./check.js";
 import { deriveVerdict } from "./verdict.js";
@@ -37,6 +38,8 @@ export interface RunOptions {
   readonly fetchImpl?: FetchLike;
   readonly timeoutSeconds?: number;
   readonly tlsProbe?: TlsProbe;
+  /** Health paths from repeatable --path; one Point check per path. */
+  readonly paths?: readonly string[];
 }
 
 export type FetchLike = (
@@ -112,10 +115,6 @@ export async function run(
       },
     },
     {
-      name: "Content sanity",
-      perform: async () => contentSanityCheck(rootResponse as HttpResponse),
-    },
-    {
       name: TLS_CHECK_NAME,
       perform: async () => {
         // HTTPS/TLS (ticket #4): https Targets get one out-of-band TLS
@@ -142,6 +141,11 @@ export async function run(
         return plainHttpTlsCheck();
       },
     },
+    {
+      name: "Content sanity",
+      perform: async () => contentSanityCheck(rootResponse as HttpResponse),
+    },
+    ...buildPointCheckSteps(target, options.paths ?? [], doFetch),
   ];
 
   const checks: CheckResult[] = [];
@@ -154,7 +158,10 @@ export async function run(
     try {
       const check = await step.perform(budgetSignal);
       checks.push(check);
-      if (!check.passed) {
+      // Only a graded failure blocks the remaining steps; skipped and
+      // faulted check results announce missing evidence without starving
+      // later steps of their own turn.
+      if (isCompleted(check) && !check.passed) {
         blocker = true;
       }
     } catch (error) {
@@ -171,6 +178,35 @@ export async function run(
   }
 
   return { target: target, verdict: deriveVerdict(checks), checks: checks };
+}
+
+/**
+ * One point check per path through the same fetch seam and the same
+ * budget signal as the root check (ticket #5). A point-fetch fault never
+ * grades Unreachable — the Target was proven reachable at the root — so
+ * the fault is announced as a skipped check with a fault-appropriate
+ * reason (skippedCheck's default reason is reserved for genuine budget
+ * exhaustion).
+ */
+function buildPointCheckSteps(
+  target: string,
+  paths: readonly string[],
+  doFetch: FetchLike,
+): CheckStep[] {
+  return paths.map((path) => ({
+    name: `Point check ${path}`,
+    perform: async (signal: AbortSignal) => {
+      try {
+        const response = await doFetch(`${target}${path}`, { signal: signal });
+        return pointCheck(response, path);
+      } catch (error) {
+        const skipReason = budgetExpired(signal, error)
+          ? undefined // genuine budget exhaustion: skippedCheck's default reason
+          : faultDiagnosis(error);
+        return skippedCheck(`Point check ${path}`, skipReason);
+      }
+    },
+  }));
 }
 
 function probeFailureDiagnosis(error: unknown): string {

@@ -21,9 +21,15 @@ export interface HttpResponse {
   body?: string;
 }
 
-
 export function reachableCheck(response: HttpResponse): CheckResult {
-  const name = "Reachable";
+  return statusClassCheck("Reachable", response);
+}
+
+/**
+ * Shared status-class grading (2xx/3xx pass) used by Reachable and point
+ * checks alike; Diagnosis text reuses Node's STATUS_CODES table.
+ */
+export function statusClassCheck(name: string, response: HttpResponse): CheckResult {
   const ok = response.status >= 200 && response.status < 400;
 
   if (ok) {

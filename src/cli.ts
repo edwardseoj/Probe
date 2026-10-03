@@ -28,14 +28,18 @@ export async function main(
     .description("Post-deployment sanity check. Deploy, run Probe, know.")
     .argument("<target>", "HTTP(S) target to check")
     .option("--timeout <seconds>", "Run budget in seconds (default 10)", "10")
+    .option("--path <p>", "Health path to point check (repeatable)", collectRepeating, [] as string[])
     .exitOverride();
 
   let target: string;
   let timeoutRaw: string;
+  let paths: string[];
   try {
     program.parse(argv, { from: "user" });
     target = program.args[0];
-    timeoutRaw = program.opts<{ timeout?: string }>().timeout ?? "10";
+    const opts = program.opts<{ timeout?: string; path?: string[] }>();
+    timeoutRaw = opts.timeout ?? "10";
+    paths = opts.path ?? [];
   } catch (error) {
     if (
       error instanceof CommanderError &&
@@ -58,9 +62,15 @@ export async function main(
     return USAGE_EXIT_CODE;
   }
 
+  const validatedPaths = validatePaths(paths);
+  if (validatedPaths === null) {
+    return USAGE_EXIT_CODE;
+  }
+
   const options: RunOptions = {
     ...runOptions,
     timeoutSeconds: timeoutSeconds,
+    paths: validatedPaths,
   };
   const runResult = await run(validated, options);
   process.stdout.write(renderRun(runResult));
@@ -90,6 +100,25 @@ export function validateTarget(rawTarget: string): string | null {
   }
 
   return withScheme;
+}
+
+/**
+ * Point-check paths validate before any network I/O, like targets. A
+ * health path must start with "/" — anything else (empty, relative,
+ * absolute URL) is a usage error.
+ */
+function collectRepeating(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
+
+function validatePaths(paths: string[]): string[] | null {
+  for (const path of paths) {
+    if (!path.startsWith("/")) {
+      usageError(`Invalid --path value (must start with "/"): ${path}`);
+      return null;
+    }
+  }
+  return paths;
 }
 
 function usageError(message: string): void {
