@@ -93,3 +93,15 @@ The first working slice is smaller than v1; these decisions hold until supersede
 - Module layout: flat `src/` with `cli.ts`, `run.ts`, `verdict.ts`, `check.ts`, `json.ts` (the `--json` machine-shape builder — serializes a RunResult into the stable contract shape), `checks/` as a directory with one file per Check (the showcase surface); presenter/input wiring in dedicated small modules (`output.ts`, `exit.ts` may be folded into `verdict.ts`/`output.ts` later if small).
 - Exit-code mapping is owned by the verdict module — no Check sets its own exit code (per ADR-0001).
 - Documentation order: `DESIGN.md` (this file) is the working spec; the README is rewritten only when the tool's behavior matches what it says. The tool is the demo — no separate demo asset for v1 "done".
+
+## Container image (post-v1, decided but not implemented)
+
+Probe will ship a **shipable container image** as a distribution channel — the point is running the probe from inside a deploy network (same-host post-deploy check, k8s Job, `docker compose` run), where the Target is only reachable from that network. This is tracked work landing after v1; the SPEC's Definition of Done is untouched. Test-infrastructure containers and a devcontainer are explicitly out of scope for that decision.
+
+Settled decisions:
+
+- **Registry and name**: `ghcr.io/edwardseoj/probe`. Display name stays "Probe" — no stylization (BRAND.md).
+- **Image shape**: multi-stage build on `node:22-alpine` — build stage compiles via tsup, runtime stage receives `dist/` plus prod dependencies only, runs as non-root `USER node`, with `ENTRYPOINT ["probe"]` so target and flags pass through plainly (`docker run --rm ghcr.io/edwardseoj/probe <target> --json`).
+- **Tags**: mirror package semver (`1.2.3`) plus a moving `latest` on each stable release; pin-ability first. No `edge` tag for now.
+- **Publish trigger**: GHCR push on GitHub Release published only, keeping image versions in lockstep with package releases; the existing CI also gains a build-but-don't-push smoke so the Dockerfile cannot rot unnoticed.
+- **Docs placement**: README gets the Docker usage blurb only when the image actually exists — same truth rule that already governs the README.

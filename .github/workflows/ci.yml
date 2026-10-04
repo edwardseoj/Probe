@@ -30,3 +30,14 @@ jobs:
           npm init -y >/dev/null
           npm install --silent ./*.tgz
           ./node_modules/.bin/probe --help | grep -q "Usage: probe"
+
+  docker:
+    # Build-but-never-push smoke: catches Dockerfile rot between releases.
+    # The push itself (release-gated GHCR publish) is ticket #23.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t ghcr.io/edwardseoj/probe:ci .
+      - name: Entrypoint smoke (build only; nothing is pushed)
+        run: "docker run --rm ghcr.io/edwardseoj/probe:ci --help | grep -q 'Usage: probe'"
