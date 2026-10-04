@@ -11,6 +11,7 @@ import { exitCodeFor } from "./verdict.js";
 import type { RunOptions } from "./run.js";
 import { renderRun } from "./output.js";
 import type { OutputMode } from "./output.js";
+import { runResultJson } from "./json.js";
 
 export const USAGE_EXIT_CODE = 3;
 
@@ -32,12 +33,14 @@ export async function main(
     .option("--path <p>", "Health path to point check (repeatable)", collectRepeating, [] as string[])
     .option("--verbose", "Add Facts and passing-check detail to the default output")
     .option("--quiet", "Print only the Verdict line")
+    .option("--json", "Full machine-readable output (stable shape)")
     .exitOverride();
 
   let target: string;
   let timeoutRaw: string;
   let paths: string[];
   let mode: OutputMode;
+  let json: boolean;
   try {
     program.parse(argv, { from: "user" });
     const flags = program.opts<{
@@ -45,11 +48,13 @@ export async function main(
       verbose?: boolean;
       quiet?: boolean;
       path?: string[];
+      json?: boolean;
     }>();
     target = program.args[0];
     timeoutRaw = flags.timeout ?? "10";
     paths = flags.path ?? [];
     mode = flags.quiet ? "quiet" : flags.verbose ? "verbose" : "default";
+    json = flags.json === true;
   } catch (error) {
     if (
       error instanceof CommanderError &&
@@ -83,7 +88,19 @@ export async function main(
     paths: validatedPaths,
   };
   const runResult = await run(validated, options);
-  process.stdout.write(renderRun(runResult, mode));
+  /**
+   * --json is its own output mode that supersedes the text tiers (ticket
+   * #9, SPEC "Output"): JSON always carries the full shape, so --verbose/
+   * --quiet have no additional effect. The shape is JSON.stringify'd here
+   * and written with a trailing newline; json.ts builds the shape purely.
+   * Never colored — structurally, not by TTY accident: the JSON path never
+   * touches chalk (SPEC "Degraded environments": never colored, never
+   * spun).
+   */
+  const out = json
+    ? JSON.stringify(runResultJson(runResult)) + "\n"
+    : renderRun(runResult, mode);
+  process.stdout.write(out);
   return exitCodeFor(runResult.verdict);
 }
 

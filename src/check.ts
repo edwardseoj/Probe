@@ -11,6 +11,10 @@
  * - fault: the check never produced evidence to grade at all (network
  *   fault, budget-expired abort with nothing completed). Announced with a
  *   Diagnosis; the verdict grades the absence of evidence.
+ *
+ * The JSON serialization layer (--json, json.ts) additionally carries a
+ * `passed: null` convention for non-graded checks; the factories below and
+ * the internal CheckResult shape are unchanged by that convention.
  */
 
 export interface CheckResult {
@@ -62,6 +66,30 @@ export function faultedCheck(name: string, diagnosis: string): CheckResult {
     fault: true,
     diagnosis: diagnosis,
   };
+}
+
+/**
+ * Shared check disposition vocabulary (stable contract, ticket #9): the
+ * three-way word for what a check's serialization carries — graded
+ * (answered and graded), skipped (skips are not failures, ADR-0001), or
+ * fault (no evidence to grade at all). json.ts keys its `status` field on
+ * this; any future disposition flag on CheckResult needs a case here.
+ */
+export type CheckStatus = "graded" | "skipped" | "fault";
+
+/**
+ * The one shared derivation of a check's disposition: skipped wins, then
+ * fault, otherwise the check was graded (isCompleted is exactly the
+ * neither-skip-nor-fault predicate, so these are exhaustive).
+ */
+export function statusOf(check: CheckResult): CheckStatus {
+  if (check.skipped === true) {
+    return "skipped";
+  }
+  if (check.fault === true) {
+    return "fault";
+  }
+  return "graded";
 }
 
 /**
