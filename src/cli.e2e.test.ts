@@ -8,6 +8,22 @@ agent.disableNetConnect();
 setGlobalDispatcher(agent);
 
 /**
+ * Normalize the Response time Fact's value for string-equality comparisons
+ * of two --json captures. Latency is the only nondeterministic field in the
+ * JSON shape (ADR-0001: it is a Fact, never a check), and a Fact's *value*
+ * is not contract copy (SPEC.md stable contract) — so differing elapsed
+ * values are test noise, not behavior. The placeholder scrubs the whole
+ * value (adjective included) since tier boundaries can flip near a rounding
+ * edge; the Fact's *name* stays visible so its presence still matters.
+ */
+function normalizeElapsed(capture: string): string {
+  return capture.replace(
+    /"name":"Response time","value":"[^"]*"/g,
+    '"name":"Response time","value":"[elapsed]"',
+  );
+}
+
+/**
  * Cert-shaped fixture for the TLS probe boundary: tests never open real
  * sockets — every https run that survives Reachable receives the probe
  * seam instead of the default node:tls one.
@@ -338,8 +354,12 @@ describe("--json output (ticket #9, stable contract)", () => {
     const withTiers = stdout.join("");
 
     // same shape modulo the (differently named) target line: compare with
-    // the target normalized so only flag composition matters
-    expect(withTiers.replace("json-super2", "json-super")).toBe(alone);
+    // the target normalized so only flag composition matters, and with the
+    // Response time Fact's value scrubbed — wall-clock latency differs
+    // between two live runs by design (ADR-0001) and is not flag behavior.
+    expect(normalizeElapsed(withTiers.replace("json-super2", "json-super"))).toBe(
+      normalizeElapsed(alone),
+    );
     expect(() => JSON.parse(withTiers)).not.toThrow();
   });
 
