@@ -62,8 +62,13 @@ export interface RunJsonShape {
   /** The verdict -> exit mapping via verdict.ts exitCodeFor (ADR-0001). */
   exitCode: 0 | 1 | 2;
   checks: JsonCheck[];
-  /** Present whenever the run has Facts (completed runs); [] allowed. */
-  facts?: readonly Fact[];
+  /**
+   * Always present (ADR-0003, ticket #15): the wire shape carries `facts`
+   * unconditionally — an empty array when the run collected no Facts. The
+   * internal RunResult may have none; this layer fabricates `[]` so
+   * consumers never need existence guards.
+   */
+  facts: readonly Fact[];
   metadata: RunMetadata;
 }
 
@@ -88,7 +93,10 @@ export function runResultJson(runResult: RunResult): RunJsonShape {
     verdict: runResult.verdict,
     exitCode: exitCodeFor(runResult.verdict),
     checks: runResult.checks.map(checkJson),
-    ...(runResult.facts !== undefined ? { facts: runResult.facts } : {}),
+    // Always-array contract (ADR-0003, ticket #15): facts is emitted
+    // unconditionally, [] when the RunResult collected no Facts — the "no
+    // response" signal stays with the faulted check's status, not the key.
+    facts: runResult.facts ?? [],
     metadata: { budgetSeconds: runResult.budgetSeconds },
   };
 }

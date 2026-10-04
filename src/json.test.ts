@@ -128,7 +128,7 @@ describe("runResultJson shape (ticket #9, stable contract)", () => {
     }
   });
 
-  test("Unreachable: fault check keeps status fault and Diagnosis; facts layer absent; zero completed still serializes", async () => {
+  test("Unreachable: fault check keeps status fault and Diagnosis; facts array always present; zero completed still serializes", async () => {
     const runResult = await unreachableRun();
     expect(runResult.verdict).toBe("Unreachable");
     const shape = runResultJson(runResult);
@@ -141,9 +141,10 @@ describe("runResultJson shape (ticket #9, stable contract)", () => {
     // A fault never produced evidence to grade either: no grade exists.
     expect(reachable?.passed).toBeNull();
     expect(reachable?.diagnosis).toBe("Connection refused");
-    // absent-or-[] semantics: faulted runs have no Facts layer at all
-    expect(shape.facts).toBeUndefined();
-    expect("facts" in shape).toBe(false);
+    // always-array semantics (ADR-0003): facts is present even when the run
+    // collected nothing — an empty array, not an omitted key.
+    expect(shape.facts).toEqual([]);
+    expect("facts" in shape).toBe(true);
   });
 
   test("plain-HTTP note survives serialization (nothing dropped)", async () => {
