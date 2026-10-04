@@ -1,0 +1,37 @@
+name: Release
+
+# Publishes the image to GHCR when a GitHub Release is published.
+# Tags mirror package.json's version exactly (lockstep with the npm release),
+# plus a moving `latest`. Auth is the workflow's GITHUB_TOKEN only
+# (contents: read, packages: write) - no new secrets. Non-release CI builds
+# the image but never pushes it (see ci.yml).
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract package version
+        id: version
+        run: |
+          version="$(node -p "require('./package.json').version")" \
+            && echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build image
+        run: docker build -t ghcr.io/edwardseoj/probe:"${{ steps.version.outputs.version }}" -t ghcr.io/edwardseoj/probe:latest .
+      - name: Push image
+        run: |
+          docker push ghcr.io/edwardseoj/probe:"${{ steps.version.outputs.version }}"
+          docker push ghcr.io/edwardseoj/probe:latest
