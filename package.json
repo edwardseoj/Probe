@@ -1,0 +1,37 @@
+{
+  "name": "@edwardseoj/probe",
+  "version": "0.1.0",
+  "description": "A lightweight CLI for post-deployment sanity checks. Deploy -> Probe -> Know.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Edward Seoj Aquino",
+  "packageManager": "pnpm@10.30.2",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "probe": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "dev": "tsx src/cli.ts",
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "chalk": "^6.0.1",
+    "commander": "^15.0.0",
+    "ora": "^9.4.1",
+    "undici": "^7.30.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "tsup": "^8.5.1",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
+  }
+}
