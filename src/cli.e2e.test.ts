@@ -245,3 +245,131 @@ describe("cli output tiers", () => {
     expect(out).toContain("→ 301 https://chain-e2e.test/landed");
   });
 });
+
+describe("--json output (ticket #9, stable contract)", () => {
+  interface Shape {
+    schema: string;
+    target: string;
+    verdict: string;
+    exitCode: number;
+    checks: { name: string; passed: boolean | null; status: string; diagnosis?: string }[];
+    facts?: { name: string; value: string }[];
+    metadata: unknown;
+  }
+
+  function shape(): Shape {
+    const out = stdout.join("");
+    expect(out.endsWith("\n")).toBe(true);
+    return JSON.parse(out);
+  }
+
+  test("Healthy target: parseable JSON with target/verdict/checks, exit 0, no ANSI codes", async () => {
+    agent
+      .get("https://json-healthy.test")
+      .intercept({ method: "GET", path: "/" })
+      .reply(204, "", { headers: { server: "nginx" } });
+    const exitCode = await main(["https://json-healthy.test", "--json"], {
+      tlsProbe: () => Promise.resolve(validTlsCert),
+    });
+    expect(exitCode).toBe(0);
+    const parsed = shape();
+    expect(parsed.schema).toBe("probe/v1");
+    expect(parsed.target).toBe("https://json-healthy.test");
+    expect(parsed.verdict).toBe("Healthy");
+    expect(parsed.exitCode).toBe(0);
+    expect(parsed.checks.map((c) => c.name)).toContain("Reachable");
+    expect(parsed.facts?.map((f) => f.name)).toContain("Response time");
+    expect(parsed.facts?.map((f) => f.name)).toContain("Server");
+    // never colored: no escape bytes in machine output, structurally
+    expect(stdout.join("")).not.toContain("\x1b");
+  });
+
+  test("Degraded target: exit 1, failing check Diagnosis present, skipped checks keep status skipped", async () => {
+    const exitCode = await main(["https://json-degraded.test", "--json"], {
+      fetchImpl: () => Promise.resolve({ status: 404, statusText: "" }),
+    });
+    expect(exitCode).toBe(1);
+    const parsed = shape();
+    expect(parsed.verdict).toBe("Degraded");
+    expect(parsed.exitCode).toBe(1);
+    const reachable = parsed.checks.find((c) => c.name === "Reachable");
+    // Diagnosis copy is not a contract (DESIGN.md: tests assert exit codes
+    // and glyphs only); assert the diagnosis-bearing shape, not the words.
+    expect(reachable?.diagnosis).toMatch(/^HTTP \d{3}/);
+    expect(reachable?.status).toBe("graded");
+    expect(reachable?.passed).toBe(false);
+    for (const check of parsed.checks.slice(1)) {
+      expect(check.status).toBe("skipped");
+      // skips are not failures: skipped checks carry no grade in JSON
+      expect(check.passed).toBeNull();
+    }
+  });
+
+  test("Unreachable target: exit 2, fault status on Reachable, no facts layer", async () => {
+    const exitCode = await main(["https://json-refused.test", "--json"]);
+    expect(exitCode).toBe(2);
+    const parsed = shape();
+    expect(parsed.verdict).toBe("Unreachable");
+    expect(parsed.exitCode).toBe(2);
+    expect(parsed.checks.find((c) => c.name === "Reachable")?.status).toBe("fault");
+    expect(parsed.facts).toBeUndefined();
+  });
+
+  test("--json supersedes --verbose and --quiet: identical output", async () => {
+    agent
+      .get("https://json-super.test")
+      .intercept({ method: "GET", path: "/" })
+      .reply(204, "");
+    await main(["https://json-super.test", "--json"], {
+      tlsProbe: () => Promise.resolve(validTlsCert),
+    });
+    const alone = stdout.join("");
+
+    stdout = [];
+    agent
+      .get("https://json-super2.test")
+      .intercept({ method: "GET", path: "/" })
+      .reply(204, "");
+    await main(["https://json-super2.test", "--json", "--verbose", "--quiet"], {
+      tlsProbe: () => Promise.resolve(validTlsCert),
+    });
+    const withTiers = stdout.join("");
+
+    // same shape modulo the (differently named) target line: compare with
+    // the target normalized so only flag composition matters
+    expect(withTiers.replace("json-super2", "json-super")).toBe(alone);
+    expect(() => JSON.parse(withTiers)).not.toThrow();
+  });
+
+  test("JSON and default text agree on the same run (JSON is the superset, one-directional)", async () => {
+    agent
+      .get("https://json-agree.test")
+      .intercept({ method: "GET", path: "/" })
+      .reply(204, "")
+      .times(2);
+    await main(["https://json-agree.test", "--json"], {
+      tlsProbe: () => Promise.resolve(validTlsCert),
+    });
+    const json = shape();
+
+    stdout = [];
+    const exitCode2 = await main(["https://json-agree.test"], {
+      tlsProbe: () => Promise.resolve(validTlsCert),
+    });
+    expect(exitCode2).toBe(0);
+    const text = stdout.join("");
+    // every check name the JSON carries is named in the text render too
+    for (const check of json.checks) {
+      expect(text).toContain(check.name);
+    }
+    // the JSON verdict's exit code is THE exit code main() returned:
+    // one shared verdict -> exit mapping (verdict.ts) drives both the
+    // process contract and the serialized envelope.
+    expect(json.exitCode).toBe(exitCode2);
+    // one-directional by design (both presentations grade one run; the
+    // default text tier deliberately omits Facts, so text without the
+    // JSON's Facts is the expected direction, not a mismatch).
+    expect(json.facts?.map((f) => f.name)).toContain("Response time");
+    expect(text).not.toContain("Response time");
+  });
+});
