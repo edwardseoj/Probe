@@ -75,13 +75,14 @@ named, and the Run grades Degraded.
 | Verdict | Meaning | Exit code |
 | --- | --- | --- |
 | Healthy | All graded checks pass | `0` |
-| Degraded | At least one graded check failed, or checks were skipped | `1` |
+| Degraded | Alongside completed checks: a graded check failed, or a check faulted, or checks were skipped | `1` |
 | Unreachable | The service could not be reached, or zero checks completed | `2` |
 | Usage error | Invalid input (bad scheme, unknown flag) rejected before a Run | `3` |
 
-Skips are not failures: budget-exhausted skips degrade the Run (exit 1), they
-never fail it. Zero completed checks grade Unreachable (exit 2). Latency never
-gates the Verdict — it is a Fact, not a check outcome.
+Skips are not failures: alongside completed checks, budget-exhausted skips
+degrade the Run (exit 1), they never fail it. Zero completed checks grade
+Unreachable (exit 2) — budget exhaustion before any check completes included.
+Latency never gates the Verdict — it is a Fact, not a check outcome.
 
 ## Output tiers
 

@@ -5,7 +5,7 @@
  */
 import { mkdtempSync, symlinkSync, writeFileSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, test, afterAll } from "vitest";
 import { isDirectInvocation } from "./cli.js";
@@ -19,8 +19,9 @@ describe("isDirectInvocation (bin entry detection)", () => {
 
   // The module URL is what the runtime resolves to a realpath, so the
   // fixture URL is built from the realpath'd dir (tmp parents can symlink).
+  // basename() keeps this path-separator safe on Windows.
   const dirReal = realpathSync(dir);
-  const moduleUrlFor = (file: string) => pathToFileURL(join(dirReal, file.split("/").pop()!)).href;
+  const moduleUrlFor = (file: string) => pathToFileURL(join(dirReal, basename(file))).href;
   const realFileUrl = moduleUrlFor(realFile);
 
   afterAll(() => {
