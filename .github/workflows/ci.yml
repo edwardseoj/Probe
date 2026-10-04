@@ -40,4 +40,4 @@ jobs:
       - name: Build image
         run: docker build -t ghcr.io/edwardseoj/probe:ci .
       - name: Entrypoint smoke (build only; nothing is pushed)
-        run: docker run --rm ghcr.io/edwardseoj/probe:ci --help | grep -q "Usage: probe"
+        run: "docker run --rm ghcr.io/edwardseoj/probe:ci --help | grep -q 'Usage: probe'"
