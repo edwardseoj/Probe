@@ -52,6 +52,28 @@ unknown flags are usage errors (exit 3) rejected before any network I/O.
 | `--quiet` | Prints only the Verdict line. |
 | `--json` | Full machine-readable output (stable shape). |
 
+## Docker image
+
+The image ships on GitHub Container Registry:
+
+```bash
+docker pull ghcr.io/edwardseoj/probe
+```
+
+Reach for the image when the Target is only reachable from inside the deploy
+network — a same-host post-deploy check, a k8s Job, or a `docker compose run`.
+The image runs as non-root with `probe` as the entrypoint, so the Target and
+flags pass through plainly, no shell wrapper:
+
+```bash
+docker run --rm ghcr.io/edwardseoj/probe <target> [flags]
+docker run --rm ghcr.io/edwardseoj/probe https://staging.example.com --json
+```
+
+Tags mirror the package releases in lockstep: pin a semver
+(`ghcr.io/edwardseoj/probe:1.2.3`) or move with `latest` — both are published
+on each Release.
+
 ## Checks
 
 One Run grades a fixed set of checks, in order, over one shared Run budget —
