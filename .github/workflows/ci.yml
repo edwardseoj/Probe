@@ -23,3 +23,10 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm build
       - run: pnpm test
+      - name: Pack smoke (tarball installs and the bin runs via its symlink)
+        run: |
+          pnpm pack --pack-destination /tmp/pack
+          cd /tmp/pack
+          npm init -y >/dev/null
+          npm install --silent ./*.tgz
+          ./node_modules/.bin/probe --help | grep -q "Usage: probe"
