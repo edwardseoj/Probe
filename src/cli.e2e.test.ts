@@ -305,14 +305,16 @@ describe("--json output (ticket #9, stable contract)", () => {
     }
   });
 
-  test("Unreachable target: exit 2, fault status on Reachable, no facts layer", async () => {
+  test("Unreachable target: exit 2, fault status on Reachable, facts is an empty array", async () => {
     const exitCode = await main(["https://json-refused.test", "--json"]);
     expect(exitCode).toBe(2);
     const parsed = shape();
     expect(parsed.verdict).toBe("Unreachable");
     expect(parsed.exitCode).toBe(2);
     expect(parsed.checks.find((c) => c.name === "Reachable")?.status).toBe("fault");
-    expect(parsed.facts).toBeUndefined();
+    // always-array semantics (ADR-0003): the wire shape carries facts even
+    // when no Facts were collected.
+    expect(parsed.facts).toEqual([]);
   });
 
   test("--json supersedes --verbose and --quiet: identical output", async () => {
