@@ -5,6 +5,10 @@
   "type": "module",
   "license": "MIT",
   "author": "Edward Seoj Aquino",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/edwardseoj/Probe.git"
+  },
   "packageManager": "pnpm@10.30.2",
   "engines": {
     "node": ">=20"

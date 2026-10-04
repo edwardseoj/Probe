@@ -6,6 +6,8 @@
 
 import { Command, CommanderError } from "commander";
 import chalk from "chalk";
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { run } from "./run.js";
 import { exitCodeFor } from "./verdict.js";
 import type { RunOptions } from "./run.js";
@@ -152,12 +154,27 @@ function usageError(message: string): void {
   process.stderr.write(chalk.red(message) + "\n");
 }
 
-/** Bin entry: never run by the in-process test seam. */
-const invokedDirectly =
-  process.argv[1] !== undefined &&
-  (process.argv[1].endsWith("cli.ts") || process.argv[1].endsWith("cli.js"));
+/**
+ * Bin entry: never run by the in-process test seam. Detection is
+ * realpath-based (extracted for tests): the installed bin is executed
+ * through npm's symlinked name (.bin/probe), so argv[1] does NOT end in
+ * "cli.js" there — it must resolve to this module file to invoke main().
+ */
+export function isDirectInvocation(
+  argv1: string | undefined,
+  moduleUrl: string,
+): boolean {
+  if (argv1 === undefined) {
+    return false;
+  }
+  try {
+    return realpathSync(argv1) === fileURLToPath(moduleUrl);
+  } catch {
+    return false;
+  }
+}
 
-if (invokedDirectly) {
+if (isDirectInvocation(process.argv[1], import.meta.url)) {
   main(process.argv.slice(2)).then((code) => {
     process.exit(code);
   });
