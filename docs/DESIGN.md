@@ -90,6 +90,6 @@ The first working slice is smaller than v1; these decisions hold until supersede
 
 - Package name: `@edwardseoj/probe` (`probe` and `probe-cli` on npm are taken); the display name stays "Probe".
 - Stack: TypeScript + Node.js runtime, `commander` (CLI parsing — no subcommand wiring for v1, `probe <url>` is the whole story), `undici` (HTTP), `chalk` + `ora` (terminal output), `Vitest` (tests), `tsup` (build), `pnpm`, GitHub Actions CI.
-- Module layout: flat `src/` with `cli.ts`, `run.ts`, `verdict.ts`, `check.ts`, `checks/` as a directory with one file per Check (the showcase surface); presenter/input wiring in dedicated small modules (`output.ts`, `exit.ts` may be folded into `verdict.ts`/`output.ts` later if small).
+- Module layout: flat `src/` with `cli.ts`, `run.ts`, `verdict.ts`, `check.ts`, `json.ts` (the `--json` machine-shape builder — serializes a RunResult into the stable contract shape), `checks/` as a directory with one file per Check (the showcase surface); presenter/input wiring in dedicated small modules (`output.ts`, `exit.ts` may be folded into `verdict.ts`/`output.ts` later if small).
 - Exit-code mapping is owned by the verdict module — no Check sets its own exit code (per ADR-0001).
 - Documentation order: `DESIGN.md` (this file) is the working spec; the README is rewritten only when the tool's behavior matches what it says. The tool is the demo — no separate demo asset for v1 "done".

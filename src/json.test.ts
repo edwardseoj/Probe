@@ -17,10 +17,11 @@ const validTlsCert: TlsCertInfo = {
   hostnameMatches: true,
 };
 
+type RunOptionsTlsProbe = NonNullable<Parameters<typeof run>[1]>["tlsProbe"];
+
 function probeOver(cert: TlsCertInfo): RunOptionsTlsProbe {
   return () => Promise.resolve(cert);
 }
-type RunOptionsTlsProbe = NonNullable<Parameters<typeof run>[1]>["tlsProbe"];
 
 async function healthyRun() {
   return run("https://healthy-json.test", {
@@ -77,6 +78,7 @@ describe("runResultJson shape (ticket #9, stable contract)", () => {
       "Content sanity",
     ]);
     for (const check of shape.checks) {
+      expect(typeof check.passed).toBe("boolean");
       expect(check.passed).toBe(true);
       expect(check.status).toBe("graded");
     }
@@ -112,12 +114,16 @@ describe("runResultJson shape (ticket #9, stable contract)", () => {
     expect(reachable?.passed).toBe(false);
     expect(reachable?.status).toBe("graded");
     expect(reachable?.diagnosis).toBe(runResult.checks[0].diagnosis);
-    expect(reachable?.diagnosis).toContain("HTTP 404");
+    // Diagnosis copy is not a contract; assert the shape, not the words.
+    expect(reachable?.diagnosis).toMatch(/^HTTP \d{3}/);
 
     for (const check of shape.checks) {
       if (check.name === "Reachable") continue;
       expect(check.status).toBe("skipped");
-      expect(check.passed).toBe(false);
+      // Skips are not failures (SPEC "Skips are not failures"): a skipped
+      // check carries no grade at all, so `passed` serializes as null —
+      // a `passed === false` consumer filter never counts it as a failure.
+      expect(check.passed).toBeNull();
       expect(check.skipReason).toContain("Reachable");
     }
   });
@@ -132,7 +138,8 @@ describe("runResultJson shape (ticket #9, stable contract)", () => {
       (c: { name: string }) => c.name === "Reachable",
     );
     expect(reachable?.status).toBe("fault");
-    expect(reachable?.passed).toBe(false);
+    // A fault never produced evidence to grade either: no grade exists.
+    expect(reachable?.passed).toBeNull();
     expect(reachable?.diagnosis).toBe("Connection refused");
     // absent-or-[] semantics: faulted runs have no Facts layer at all
     expect(shape.facts).toBeUndefined();
@@ -152,17 +159,40 @@ describe("runResultJson shape (ticket #9, stable contract)", () => {
     expect(tls?.note).toBeDefined();
   });
 
-  test("status vocabulary is exactly graded|skipped|fault across all three fixtures", async () => {
+  test("status vocabulary is exactly graded|skipped|fault; graded keeps a boolean passed, non-graded serializes null", async () => {
     for (const runResult of [
       await healthyRun(),
       await degradedRun(),
       await unreachableRun(),
     ]) {
       const shape = runResultJson(runResult);
+      // every check lands in the vocabulary...
       for (const check of shape.checks) {
         expect(["graded", "skipped", "fault"]).toContain(check.status);
+        if (check.status === "graded") {
+          expect(typeof check.passed).toBe("boolean");
+        } else {
+          expect(check.passed).toBeNull();
+        }
       }
     }
+  });
+
+  test("graded counts across the three fixtures: Healthy all graded, Degraded keeps its graded failure, Unreachable has none", async () => {
+    expect(
+      runResultJson(await healthyRun()).checks.filter(
+        (check) => check.status === "graded",
+      ).length,
+    ).toBe(3);
+    const degradedShape = runResultJson(await degradedRun());
+    expect(
+      degradedShape.checks.filter((check) => check.status === "graded").length,
+    ).toBe(1);
+    expect(
+      runResultJson(await unreachableRun()).checks.filter(
+        (check) => check.status === "graded",
+      ).length,
+    ).toBe(0);
   });
 
   test("stringified output is parseable JSON with no ANSI codes", async () => {
@@ -173,6 +203,16 @@ describe("runResultJson shape (ticket #9, stable contract)", () => {
   });
 });
 
+/**
+ * --json vs default text output agreement on the same Run.
+ *
+ * One-directional BY DESIGN (issue #9 AC 3 agreement test): both
+ * presentations come from the same RunResult object, and text default-tier
+ * deliberately omits Facts (verbose-only) — so agreement is asserted as
+ * "JSON carries everything text names, and both grade the run identically",
+ * never the reverse. Human copy is not a contract, so only names, statuses
+ * and the exit code are compared across the two presentations.
+ */
 describe("--json vs default text output agreement on the same Run", () => {
   test("JSON is the superset: every check name rendered in text appears in the JSON checks array", async () => {
     const runResult = await degradedRun();
@@ -185,5 +225,9 @@ describe("--json vs default text output agreement on the same Run", () => {
     }
     // the same verdict object drives both presentations
     expect(shape.verdict).toBe(runResult.verdict);
+    // the JSON verdict's exit code is THE exit code main()/renderRun's run
+    // graded: one shared mapping (verdict.ts) drives text, JSON and process
+    // exit alike.
+    expect(shape.exitCode).toBe(exitCodeFor(runResult.verdict));
   });
 });

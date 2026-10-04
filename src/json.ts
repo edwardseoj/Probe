@@ -2,35 +2,51 @@
  * json.ts — the --json machine shape (ticket #9). SPEC "Output": --json is
  * the FULL shape — Verdict, Target, every Check with name/passed, every
  * Fact with its value, plus metadata. Nothing dropped: consumers may
- * derive minimal projections, never the reverse (never a metric backfill).
+ * derive minimal projections, never the reverse.
  *
  * The shape is a STABLE CONTRACT (SPEC "Contract stability", GitHub issue
  * #9): field names, the verdict vocabulary (Healthy/Degraded/Unreachable —
- * GLOSSARY terms, never "result"/"metric") and the exitCode are
- * version-breaking to change. Human copy is not here: no verdict copy, no
- * glyphs, no colors — plain machine output under process.stdout.
+ * GLOSSARY terms) and the exitCode are version-breaking to change. Human
+ * copy is not here: no verdict copy, no glyphs, no colors — plain machine
+ * output under process.stdout.
  */
 
 import { exitCodeFor } from "./verdict.js";
-import { isCompleted } from "./check.js";
+import { statusOf } from "./check.js";
+import type { CheckStatus } from "./check.js";
 import type { CheckResult } from "./check.js";
-import type { RunResult } from "./run.js";
+import type { Fact, RunResult, Verdict } from "./run.js";
 
 /** Self-describing, versioned envelope (stable contract). */
 const SCHEMA = "probe/v1";
 
 /**
- * Check disposition vocabulary (stable contract): distinguishes graded
- * checks (answered and graded) from skips (skips are not failures,
- * ADR-0001) and faults (no evidence to grade at all). The distinction must survive
- * serialization on every check in run order — a skipped check keeps
- * status "skipped", never collapses into plain passed:false.
+ * The machine-readable disposition of a serialized check: `status` is the
+ * three-way vocabulary from check.ts (graded | skipped | fault). It — not
+ * `passed` — is how a consumer tells a graded failure apart from announced
+ * non-evidence.
  */
-export type CheckStatus = "graded" | "skipped" | "fault";
+export type { CheckStatus };
 
+/**
+ * Skips are not failures (SPEC.md "Skips are not failures", ADR-0001), so a
+ * check that was never graded must not read as one in this shape. There is
+ * a grade to report ONLY when status is "graded":
+ *
+ * - `passed: true | false` — a graded outcome; consumers filter failures
+ *   as `passed === false` (or `status === "graded" && passed === false`).
+ * - `passed: null` — no grade exists (status "skipped" or "fault"): the
+ *   check produced no evidence to grade, so it carries neither a pass nor
+ *   a fail. A `passed === false` filter therefore never miscounts skips or
+ *   faults as failures; use `status` for the full three-way split.
+ *
+ * The internal CheckResult shape (check.ts) is unchanged — this null
+ * convention lives only in the JSON serialization layer.
+ */
 export interface JsonCheck {
   name: string;
-  passed: boolean;
+  /** Boolean for graded checks; null when no grade exists (skipped/faulted). */
+  passed: boolean | null;
   status: CheckStatus;
   diagnosis?: string;
   detail?: string;
@@ -38,23 +54,24 @@ export interface JsonCheck {
   skipReason?: string;
 }
 
-export interface JsonFact {
-  name: string;
-  value: string;
-}
-
 export interface RunJsonShape {
-  schema: "probe/v1";
+  /** The versioned envelope: always the SCHEMA constant's value. */
+  schema: typeof SCHEMA;
   target: string;
-  verdict: "Healthy" | "Degraded" | "Unreachable";
+  verdict: Verdict;
   /** The verdict -> exit mapping via verdict.ts exitCodeFor (ADR-0001). */
   exitCode: 0 | 1 | 2;
   checks: JsonCheck[];
   /** Present whenever the run has Facts (completed runs); [] allowed. */
-  facts?: readonly JsonFact[];
+  facts?: readonly Fact[];
   metadata: RunMetadata;
 }
 
+/**
+ * Intentionally minimal (budgetSeconds only, ticket #9). Anything added
+ * later is an additive, version-bearing change to the stable contract —
+ * never speculative fields, never derived backfill.
+ */
 interface RunMetadata {
   budgetSeconds?: number;
 }
@@ -77,12 +94,14 @@ export function runResultJson(runResult: RunResult): RunJsonShape {
 }
 
 function checkJson(check: CheckResult): JsonCheck {
-  const status: CheckStatus = !isCompleted(check)
-    ? check.skipped === true
-      ? "skipped"
-      : "fault"
-    : "graded";
-  const out: JsonCheck = { name: check.name, passed: check.passed, status };
+  // The three-way disposition comes from the one shared derivation
+  // (check.ts statusOf); the JSON layer only decides how `passed` reads.
+  const status = statusOf(check);
+  const out: JsonCheck = {
+    name: check.name,
+    passed: status === "graded" ? check.passed : null,
+    status,
+  };
   if (check.diagnosis !== undefined) out.diagnosis = check.diagnosis;
   if (check.detail !== undefined) out.detail = check.detail;
   if (check.note !== undefined) out.note = check.note;

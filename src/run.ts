@@ -32,8 +32,8 @@ import type { Verdict } from "./verdict.js";
 
 export type { Verdict } from "./verdict.js";
 export { exitCodeFor, deriveVerdict } from "./verdict.js";
-export { skippedCheck, faultedCheck, isCompleted } from "./check.js";
-export type { CheckResult } from "./check.js";
+export { skippedCheck, faultedCheck, isCompleted, statusOf } from "./check.js";
+export type { CheckResult, CheckStatus } from "./check.js";
 
 export interface RunOptions {
   readonly fetchImpl?: FetchLike;

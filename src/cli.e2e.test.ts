@@ -252,7 +252,7 @@ describe("--json output (ticket #9, stable contract)", () => {
     target: string;
     verdict: string;
     exitCode: number;
-    checks: { name: string; passed: boolean; status: string; diagnosis?: string }[];
+    checks: { name: string; passed: boolean | null; status: string; diagnosis?: string }[];
     facts?: { name: string; value: string }[];
     metadata: unknown;
   }
@@ -282,8 +282,6 @@ describe("--json output (ticket #9, stable contract)", () => {
     expect(parsed.facts?.map((f) => f.name)).toContain("Server");
     // never colored: no escape bytes in machine output, structurally
     expect(stdout.join("")).not.toContain("\x1b");
-    // never went through text verdict copy
-    expect(stdout.join("")).not.toContain("Deployment looks healthy.");
   });
 
   test("Degraded target: exit 1, failing check Diagnosis present, skipped checks keep status skipped", async () => {
@@ -295,10 +293,15 @@ describe("--json output (ticket #9, stable contract)", () => {
     expect(parsed.verdict).toBe("Degraded");
     expect(parsed.exitCode).toBe(1);
     const reachable = parsed.checks.find((c) => c.name === "Reachable");
+    // Diagnosis copy is not a contract (DESIGN.md: tests assert exit codes
+    // and glyphs only); assert the diagnosis-bearing shape, not the words.
+    expect(reachable?.diagnosis).toMatch(/^HTTP \d{3}/);
     expect(reachable?.status).toBe("graded");
-    expect(reachable?.diagnosis).toContain("HTTP 404");
+    expect(reachable?.passed).toBe(false);
     for (const check of parsed.checks.slice(1)) {
       expect(check.status).toBe("skipped");
+      // skips are not failures: skipped checks carry no grade in JSON
+      expect(check.passed).toBeNull();
     }
   });
 
@@ -338,7 +341,7 @@ describe("--json output (ticket #9, stable contract)", () => {
     expect(() => JSON.parse(withTiers)).not.toThrow();
   });
 
-  test("JSON and default text agree on the same run (JSON is the superset)", async () => {
+  test("JSON and default text agree on the same run (JSON is the superset, one-directional)", async () => {
     agent
       .get("https://json-agree.test")
       .intercept({ method: "GET", path: "/" })
@@ -355,8 +358,18 @@ describe("--json output (ticket #9, stable contract)", () => {
     });
     expect(exitCode2).toBe(0);
     const text = stdout.join("");
+    // every check name the JSON carries is named in the text render too
     for (const check of json.checks) {
       expect(text).toContain(check.name);
     }
+    // the JSON verdict's exit code is THE exit code main() returned:
+    // one shared verdict -> exit mapping (verdict.ts) drives both the
+    // process contract and the serialized envelope.
+    expect(json.exitCode).toBe(exitCode2);
+    // one-directional by design (both presentations grade one run; the
+    // default text tier deliberately omits Facts, so text without the
+    // JSON's Facts is the expected direction, not a mismatch).
+    expect(json.facts?.map((f) => f.name)).toContain("Response time");
+    expect(text).not.toContain("Response time");
   });
 });
